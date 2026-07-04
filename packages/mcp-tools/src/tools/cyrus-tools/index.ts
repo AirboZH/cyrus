@@ -7,6 +7,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { registerImageTools } from "../image-tools/index.js";
 import { registerSoraTools } from "../sora-tools/index.js";
+import { FeishuDocsClient } from "./feishu-docs.js";
 import {
 	type FailureModesHttpClient,
 	type ResolveSessionFromCwd,
@@ -984,6 +985,60 @@ export function createCyrusToolsServer(
 			}
 		},
 	);
+
+	// Register the Feishu document reader whenever the Feishu app credentials
+	// are configured. Lets an agent read a Feishu/Lark docx or wiki page by URL
+	// or token (via the app's tenant_access_token) instead of WebFetch, which
+	// fails on auth-gated Feishu docs.
+	const feishuAppId = process.env.FEISHU_APP_ID?.trim();
+	const feishuAppSecret = process.env.FEISHU_APP_SECRET?.trim();
+	if (feishuAppId && feishuAppSecret) {
+		const feishuDocs = new FeishuDocsClient(
+			feishuAppId,
+			feishuAppSecret,
+			process.env.FEISHU_BASE_URL?.trim() || undefined,
+		);
+		server.registerTool(
+			"feishu_read_document",
+			{
+				description:
+					"Read the text content of a Feishu (Lark) document — a docx document or a wiki page. Pass the document URL (e.g. https://<tenant>.feishu.cn/docx/<token> or /wiki/<token>) or its raw token. ALWAYS use this instead of WebFetch for Feishu/Lark document links: Feishu docs require app authentication and WebFetch will fail. The Cyrus bot can only read documents it has been granted access to — if you get a permission error, tell the user to share the document with the Cyrus bot/app and try again. Only docx and wiki pages are supported (sheets/bitable return a note).",
+				inputSchema: {
+					urlOrToken: z
+						.string()
+						.describe(
+							"The Feishu/Lark document URL or token (a docx or wiki page)",
+						),
+				},
+			},
+			async ({ urlOrToken }) => {
+				try {
+					const result = await feishuDocs.readDocument(urlOrToken);
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: JSON.stringify({ success: true, ...result }),
+							},
+						],
+					};
+				} catch (error) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: JSON.stringify({
+									success: false,
+									error: error instanceof Error ? error.message : String(error),
+									hint: "If this is a permission error (code 1254xxx / 'no permission'), ask the user to share the document with the Cyrus bot/app, then retry.",
+								}),
+							},
+						],
+					};
+				}
+			},
+		);
+	}
 
 	// Register the log_failure_mode tool whenever the harness wires it up
 	// (EdgeWorker provides the cwd→session resolver and an HTTP client to
