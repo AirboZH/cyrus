@@ -82,6 +82,7 @@ import {
 	FeishuEventTransport,
 	FeishuTokenProvider,
 	type FeishuWebhookEvent,
+	FeishuWsClient,
 } from "cyrus-feishu-event-transport";
 import { GeminiRunner } from "cyrus-gemini-runner";
 import {
@@ -225,6 +226,7 @@ export class EdgeWorker extends EventEmitter {
 	private chatSessionHandler: ChatSessionHandler<SlackWebhookEvent> | null =
 		null;
 	private feishuEventTransport: FeishuEventTransport | null = null;
+	private feishuWsClient: FeishuWsClient | null = null;
 	private feishuTokenProvider: FeishuTokenProvider | null = null;
 	private feishuChatSessionHandler: ChatSessionHandler<FeishuWebhookEvent> | null =
 		null;
@@ -1335,6 +1337,41 @@ export class EdgeWorker extends EventEmitter {
 		this.feishuEventTransport.register();
 
 		this.logger.info("Feishu event transport registered (direct mode)");
+
+		// Also open a long connection (WebSocket) when app credentials are present.
+		// This is the recommended path for self-host: Feishu pushes events over the
+		// connection, so NO public callback URL / Encrypt Key / Verification Token
+		// is needed. The webhook route above stays registered for cloud/proxy
+		// setups; Feishu delivers via whichever mode is selected in the app's
+		// event-subscription config, so the two never double-fire.
+		if (feishuAppId && feishuAppSecret) {
+			this.feishuWsClient = new FeishuWsClient(
+				{
+					appId: feishuAppId,
+					appSecret: feishuAppSecret,
+					domain: feishuBaseUrl?.includes("larksuite.com") ? "lark" : "feishu",
+					isThreadFollowingEnabled: () => this.isFeishuThreadFollowingEnabled(),
+					getBotOpenId: () => this.feishuTokenProvider?.getCachedBotOpenId(),
+				},
+				this.logger,
+			);
+			this.feishuWsClient.on("event", (event: FeishuWebhookEvent) => {
+				this.feishuChatSessionHandler!.handleEvent(event).catch((error) => {
+					this.logger.error(
+						"Failed to handle Feishu long-connection event",
+						error instanceof Error ? error : new Error(String(error)),
+					);
+				});
+			});
+			this.feishuWsClient.on("message", (message: InternalMessage) => {
+				this.handleMessage(message);
+			});
+			this.feishuWsClient.on("error", (error: Error) => {
+				this.handleError(error);
+			});
+			this.feishuWsClient.start();
+			this.logger.info("Feishu long-connection client started");
+		}
 	}
 
 	/**
@@ -2800,6 +2837,10 @@ ${taskSection}`;
 				}
 			}
 		}
+
+		// Close the Feishu long connection (holds a live WebSocket)
+		this.feishuWsClient?.close();
+		this.feishuWsClient = null;
 
 		// Clear event transport (no explicit cleanup needed, routes are removed when server stops)
 		this.linearEventTransport = null;

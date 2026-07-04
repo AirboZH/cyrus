@@ -3,16 +3,12 @@ import { EventEmitter } from "node:events";
 import type { TranslationContext } from "cyrus-core";
 import { createLogger, type ILogger } from "cyrus-core";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import {
-	decodeFeishuContent,
-	FeishuMessageTranslator,
-} from "./FeishuMessageTranslator.js";
+import { FeishuMessageTranslator } from "./FeishuMessageTranslator.js";
+import { normalizeFeishuMessageEvent } from "./normalize.js";
 import type {
 	FeishuEventEnvelope,
-	FeishuEventPayload,
 	FeishuEventTransportConfig,
 	FeishuEventTransportEvents,
-	FeishuEventType,
 	FeishuMessageReceiveEvent,
 	FeishuVerificationMode,
 	FeishuWebhookEvent,
@@ -359,91 +355,31 @@ export class FeishuEventTransport extends EventEmitter {
 		const messageEvent = envelope.event as
 			| FeishuMessageReceiveEvent
 			| undefined;
-		const message = messageEvent?.message;
-		if (!message) {
+
+		const result = normalizeFeishuMessageEvent(
+			{
+				eventId,
+				tenantKey: header?.tenant_key ?? "",
+				createTime: header?.create_time ?? "",
+				sender: messageEvent?.sender,
+				message: messageEvent?.message,
+			},
+			{
+				getBotOpenId: this.config.getBotOpenId,
+				isThreadFollowingEnabled: this.config.isThreadFollowingEnabled,
+				upstreamGated,
+			},
+		);
+
+		if ("ignored" in result) {
+			this.logger.debug(`Ignoring Feishu event ${eventId}: ${result.ignored}`);
 			reply.code(200).send({ code: 0 });
 			return;
 		}
 
-		// Drop the bot's own / app-authored messages to avoid loops.
-		const senderType = messageEvent?.sender?.sender_type;
-		const senderOpenId = messageEvent?.sender?.sender_id?.open_id;
-		const botOpenId = this.config.getBotOpenId?.();
-		if (
-			senderType === "app" ||
-			(botOpenId && senderOpenId && senderOpenId === botOpenId)
-		) {
-			this.logger.debug("Ignoring Feishu message authored by the bot itself");
-			reply.code(200).send({ code: 0 });
-			return;
-		}
-
-		const chatType = message.chat_type ?? "group";
-		const mentions = message.mentions ?? [];
-		const botMentioned =
-			chatType === "p2p" ||
-			(botOpenId
-				? mentions.some((m) => m.id?.open_id === botOpenId)
-				: mentions.length > 0);
-		const feishuEventType: FeishuEventType = botMentioned
-			? "mention"
-			: "message";
-
-		// Thread-following kill-switch: drop plain messages when disabled.
-		if (
-			feishuEventType === "message" &&
-			this.config.isThreadFollowingEnabled &&
-			!this.config.isThreadFollowingEnabled()
-		) {
-			this.logger.debug(
-				`Feishu thread-following disabled; ignoring message event (chat ${message.chat_id})`,
-			);
-			reply.code(200).send({ code: 0 });
-			return;
-		}
-
-		// Plain follow-ups only matter inside a thread the bot may be bound to.
-		if (
-			feishuEventType === "message" &&
-			!message.root_id &&
-			!message.thread_id &&
-			!message.parent_id
-		) {
-			this.logger.debug(
-				`Ignoring non-threaded Feishu message (chat ${message.chat_id})`,
-			);
-			reply.code(200).send({ code: 0 });
-			return;
-		}
-
-		const rawContent = message.content ?? "";
-		const messageType = message.message_type ?? "text";
-		const payload: FeishuEventPayload = {
-			type: feishuEventType,
-			user: senderOpenId ?? "",
-			text: decodeFeishuContent(messageType, rawContent, mentions),
-			rawContent,
-			messageType,
-			messageId: message.message_id,
-			chatId: message.chat_id,
-			chatType,
-			rootId: message.root_id,
-			parentId: message.parent_id,
-			threadId: message.thread_id,
-			createTime: header?.create_time ?? message.create_time ?? "0",
-			mentions,
-		};
-
-		const webhookEvent: FeishuWebhookEvent = {
-			eventType: feishuEventType,
-			eventId,
-			payload,
-			tenantKey: header?.tenant_key ?? "",
-			upstreamGated,
-		};
-
+		const webhookEvent = result.event;
 		this.logger.info(
-			`Received Feishu ${feishuEventType} (event: ${eventId}, chat: ${message.chat_id})`,
+			`Received Feishu ${webhookEvent.eventType} (event: ${eventId}, chat: ${webhookEvent.payload.chatId})`,
 		);
 
 		this.emit("event", webhookEvent);

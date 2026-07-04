@@ -23,6 +23,16 @@ export {
 	FeishuTokenProvider,
 	type FeishuTokenProviderOptions,
 } from "./FeishuTokenProvider.js";
+export {
+	FeishuWsClient,
+	type FeishuWsClientConfig,
+} from "./FeishuWsClient.js";
+export {
+	type FeishuMessageEventInput,
+	type FeishuNormalizeOptions,
+	type FeishuNormalizeResult,
+	normalizeFeishuMessageEvent,
+} from "./normalize.js";
 export type {
 	FeishuEncryptedEnvelope,
 	FeishuEventEnvelope,
