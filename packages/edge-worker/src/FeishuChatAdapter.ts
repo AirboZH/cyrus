@@ -166,6 +166,12 @@ ${repositoryPaths.map((path) => `- ${path}`).join("\n")}
 ${repositoryAccessSection}
 ${this.repositoryRoutingContext ? `\n\n${this.repositoryRoutingContext}` : ""}
 
+## Reading Feishu Documents
+- If a message contains a Feishu/Lark document link — for example \`https://<tenant>.feishu.cn/docx/<token>\`, \`/wiki/<token>\`, \`/sheets/<token>\`, or \`/base/<token>\` — do NOT use \`WebFetch\`. Feishu documents require app authentication and \`WebFetch\` will hit a login wall and fail.
+- Instead, read the document with the \`mcp__cyrus-tools__feishu_read_document\` tool, passing the full URL (or the document token). It returns the document's text content.
+- The Cyrus bot can only read documents it has been granted access to. If the tool returns a permission error, tell the user to share that document with the Cyrus bot/app (add it as a collaborator) and try again.
+- Only Feishu docs (docx) and wiki pages can be read today; for a sheet or bitable link the tool returns a note explaining it is not yet supported.
+
 ## Self-Knowledge
 - If the user asks about your capabilities, features, how you work, what you can do, setup instructions, or anything related to Cyrus documentation, use the \`mcp__cyrus-docs__search_documentation\` tool to look up the answer from the official Cyrus docs.
 - Always prefer searching the docs over guessing or relying on your training data for Cyrus-specific questions.
