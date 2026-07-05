@@ -166,6 +166,32 @@ describe("FeishuChatAdapter integration with ChatSessionHandler", () => {
 		expect(prompt).toContain(FEISHU_NO_RESPONSE_SENTINEL);
 	});
 
+	it("default (non-full-access) system prompt frames the session as read-only", () => {
+		const adapter = new FeishuChatAdapter(
+			createStaticProvider(),
+			createMockTokenProvider(),
+		);
+		const prompt = adapter.buildSystemPrompt(mentionEvent());
+		expect(prompt).toContain("transient workspace");
+		expect(prompt).not.toContain("Execution Environment (Full Access)");
+	});
+
+	it("full-access system prompt tells the agent it has unrestricted host access", () => {
+		const adapter = new FeishuChatAdapter(
+			createStaticProvider(),
+			createMockTokenProvider(),
+			undefined,
+			{ fullAccess: true },
+		);
+		const prompt = adapter.buildSystemPrompt(mentionEvent());
+		expect(prompt).toContain("Execution Environment (Full Access)");
+		expect(prompt).toContain("entire host filesystem");
+		// It should NOT claim to be a read-only transient workspace anymore.
+		expect(prompt).not.toContain("transient workspace, not associated");
+		// Orchestration path stays available for real repo code changes.
+		expect(prompt).toContain("mcp__linear__save_issue");
+	});
+
 	it("@mention creates a session and threads the agent's reply back to Feishu", async () => {
 		const reply = vi
 			.spyOn(FeishuMessageService.prototype, "replyMessage")

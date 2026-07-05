@@ -45,6 +45,7 @@ export interface IChatToolResolver {
 	buildChatAllowedTools(
 		mcpConfigKeys?: string[],
 		userMcpTools?: string[],
+		fullAccess?: boolean,
 	): string[];
 }
 
@@ -102,6 +103,17 @@ export interface ChatRunnerConfigInput {
 	 * these skills into its repository discovery layout.
 	 */
 	skills?: string[] | "all";
+	/**
+	 * When true, this chat session runs as a full-capability agent: the
+	 * complete tool set (Write/Edit/Bash/…) instead of the read-only chat
+	 * default, and the runner skips the home-directory read restrictions so it
+	 * can read/write anywhere on the host. Used by the Feishu front door when
+	 * `FEISHU_FULL_ACCESS` is enabled.
+	 *
+	 * SECURITY: anyone who can message the bot can then run arbitrary commands
+	 * as the host user. Only enable for trusted, operator-controlled channels.
+	 */
+	fullAccess?: boolean;
 	logger: ILogger;
 	onMessage: (message: SDKMessage) => void | Promise<void>;
 	onError: (error: Error) => void;
@@ -249,6 +261,7 @@ export class RunnerConfigBuilder {
 		const allowedTools = this.chatToolResolver.buildChatAllowedTools(
 			mcpConfigKeys,
 			userMcpTools,
+			input.fullAccess,
 		);
 
 		const repositoryPaths = Array.from(
@@ -269,6 +282,9 @@ export class RunnerConfigBuilder {
 			workingDirectory: input.workspacePath,
 			allowedTools,
 			disallowedTools: [] as string[],
+			// Full-access chat sessions read/write across the whole host, so the
+			// runner must not layer on the home-directory read restrictions.
+			...(input.fullAccess ? { unrestrictedFilesystemAccess: true } : {}),
 			allowedDirectories: [
 				input.workspacePath,
 				autoMemoryDirectory,

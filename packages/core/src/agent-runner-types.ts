@@ -459,6 +459,18 @@ export interface AgentRunnerConfig {
 	 * the cwd, so their repo-local skills get discovered.
 	 */
 	additionalDirectories?: string[];
+	/**
+	 * When true, the runner does NOT apply the home-directory read
+	 * restrictions that normally deny Read access to everything under `~/`
+	 * outside the working directory and `allowedDirectories`. Combined with a
+	 * full tool set (Write/Edit/Bash), this yields an agent with unrestricted
+	 * read/write/exec access to the entire host filesystem.
+	 *
+	 * SECURITY: only enable for trusted, operator-controlled entry points.
+	 * Used by the Feishu front door when `FEISHU_FULL_ACCESS` is set — anyone
+	 * who can message the bot can then run arbitrary commands as the host user.
+	 */
+	unrestrictedFilesystemAccess?: boolean;
 	/** Session ID to resume from a previous session */
 	resumeSessionId?: string;
 	/** Workspace name for logging and organization */

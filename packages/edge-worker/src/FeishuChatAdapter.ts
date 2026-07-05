@@ -47,6 +47,7 @@ export class FeishuChatAdapter
 	private repositoryRoutingContext: string;
 	private behavioursPageUrl: string;
 	private apiBaseUrl: string | undefined;
+	private fullAccess: boolean;
 	private logger: ILogger;
 
 	constructor(
@@ -58,6 +59,13 @@ export class FeishuChatAdapter
 			cyrusAppBaseUrl?: string;
 			/** Feishu open-platform base URL (feishu.cn vs larksuite.com). */
 			apiBaseUrl?: string;
+			/**
+			 * When true, the session runs as a full-capability agent with
+			 * unrestricted host access (see `FEISHU_FULL_ACCESS`). Only affects
+			 * the system prompt here — the actual tool/filesystem grant is wired
+			 * through the ChatSessionHandler → RunnerConfigBuilder path.
+			 */
+			fullAccess?: boolean;
 		},
 	) {
 		this.repositoryProvider = repositoryProvider;
@@ -69,6 +77,7 @@ export class FeishuChatAdapter
 			? `${appBaseUrl}${BEHAVIOURS_PAGE_ROUTE}`
 			: "";
 		this.apiBaseUrl = options?.apiBaseUrl;
+		this.fullAccess = options?.fullAccess ?? false;
 		this.logger = logger ?? createLogger({ component: "FeishuChatAdapter" });
 	}
 
@@ -115,8 +124,18 @@ export class FeishuChatAdapter
 		const repositoryPaths = Array.from(
 			new Set(this.repositoryProvider.getRepositoryPaths().filter(Boolean)),
 		).sort();
-		const repositoryAccessSection =
-			repositoryPaths.length > 0
+		const repositoryAccessSection = this.fullAccess
+			? repositoryPaths.length > 0
+				? `
+## Repository Access
+- You have full read/write access to the following configured repositories:
+${repositoryPaths.map((path) => `- ${path}`).join("\n")}
+
+- Run \`git -C <path> pull\` to refresh a repository before working in it.`
+				: `
+## Repository Access
+- No repository paths are configured, but you can read and write anywhere on the host filesystem.`
+			: repositoryPaths.length > 0
 				? `
 ## Repository Access
 - You have read-only access to the following configured repositories:
@@ -131,6 +150,24 @@ ${repositoryPaths.map((path) => `- ${path}`).join("\n")}
 				: `
 ## Repository Access
 - No repository paths are configured for this chat session.`;
+
+		const instructionsSection = this.fullAccess
+			? `## Instructions
+- Be concise in your responses as they will be posted back to Feishu
+- You are a full-capability agent: you can answer questions, provide analysis, help with planning, assist with research, AND directly carry out work.
+
+## Execution Environment (Full Access)
+- You are running directly on the host machine — NOT sandboxed and NOT limited to a transient workspace.
+- You have read/write access to the entire host filesystem (including the home directory and \`~/.cyrus\`), and you can run arbitrary shell commands via \`Bash\` and edit any file via \`Write\`/\`Edit\`.
+- Use these directly for operational and local tasks: inspecting or editing \`~/.cyrus\` config, installing or updating skills, querying data on the server, running scripts, etc. Do not tell the user you lack access — you have it.
+- Your current working directory is a scratch workspace; \`cd\` to wherever the task actually needs to happen.
+- For substantial repository code changes that should land as a commit / pull request, still prefer the Linear-issue orchestration flow below — it checks out an isolated worktree and opens a PR. Act directly for everything else.`
+			: `## Instructions
+- You are running in a transient workspace, not associated with any code repository
+- Be concise in your responses as they will be posted back to Feishu
+- If the user's request involves code changes, help them plan the work and create an issue in their project tracker (see Orchestration Notes below)
+- You can answer questions, provide analysis, help with planning, and assist with research
+- If files need to be created or examined, they will be in your working directory`;
 
 		const stopListeningSection = this.behavioursPageUrl
 			? `
@@ -157,12 +194,7 @@ ${repositoryPaths.map((path) => `- ${path}`).join("\n")}
 - NEVER narrate your decision about whether to respond. Your entire output is posted verbatim to the thread — there is no private scratchpad. Either emit the bare token, or reply directly to the user's message as if the decision never happened.
 - When you do respond, be genuinely helpful and concise.${stopListeningSection}
 
-## Instructions
-- You are running in a transient workspace, not associated with any code repository
-- Be concise in your responses as they will be posted back to Feishu
-- If the user's request involves code changes, help them plan the work and create an issue in their project tracker (see Orchestration Notes below)
-- You can answer questions, provide analysis, help with planning, and assist with research
-- If files need to be created or examined, they will be in your working directory
+${instructionsSection}
 ${repositoryAccessSection}
 ${this.repositoryRoutingContext ? `\n\n${this.repositoryRoutingContext}` : ""}
 

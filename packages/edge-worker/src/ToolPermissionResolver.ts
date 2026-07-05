@@ -87,13 +87,21 @@ export class ToolPermissionResolver {
 	 *   is purely additive for non-standard servers.
 	 * @param userMcpTools - User-configured MCP tool entries from repository
 	 *   `allowedTools` (already `mcp__*` prefixed).
+	 * @param fullAccess - When true, the base list is the complete tool set
+	 *   (`getAllTools()` — Write/Edit/Bash/…) instead of the read-only chat
+	 *   default. The workspace MCP prefixes are still folded in. Used by the
+	 *   Feishu full-access front door. SECURITY: grants arbitrary command
+	 *   execution to anyone who can message the bot.
 	 */
 	public buildChatAllowedTools(
 		mcpConfigKeys?: string[],
 		userMcpTools?: string[],
+		fullAccess?: boolean,
 	): string[] {
-		const baseChatTools =
-			this.config.slackAllowedTools && this.config.slackAllowedTools.length > 0
+		const baseChatTools = fullAccess
+			? getAllTools()
+			: this.config.slackAllowedTools &&
+					this.config.slackAllowedTools.length > 0
 				? this.config.slackAllowedTools
 				: [...SLACK_DEFAULT_ALLOWED_TOOLS];
 

@@ -97,6 +97,14 @@ export interface ChatSessionHandlerDeps {
 		repository?: RepositoryConfig;
 		repositoryPaths: string[];
 	}) => Promise<{ plugins?: SdkPluginConfig[]; skills?: string[] | "all" }>;
+	/**
+	 * Run this platform's chat sessions as full-capability agents — the
+	 * complete tool set plus unrestricted host filesystem access — instead of
+	 * the read-only chat default. Set by the Feishu front door via the
+	 * `FEISHU_FULL_ACCESS` env var. SECURITY: grants arbitrary command
+	 * execution to anyone who can message the bot.
+	 */
+	fullAccess?: boolean;
 	onWebhookStart: () => void;
 	onWebhookEnd: () => void;
 	onStateChange: () => Promise<void>;
@@ -661,6 +669,7 @@ export class ChatSessionHandler<TEvent> {
 			platformMcpConfigOverrides: this.deps.getPlatformMcpConfigOverrides?.(),
 			plugins: skillsConfig.plugins,
 			skills: skillsConfig.skills,
+			fullAccess: this.deps.fullAccess,
 			logger: sessionLogger,
 			onMessage: (message: SDKMessage) =>
 				this.handleAgentMessage(sessionId, message),

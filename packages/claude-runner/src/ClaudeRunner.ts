@@ -547,12 +547,18 @@ export class ClaudeRunner extends EventEmitter implements IAgentRunner {
 			// Claude from reading SSH keys, credentials, etc. `Read(~/**)` does
 			// not work as a disallowedTools pattern — `~` is not expanded to the
 			// home directory path, so the pattern never matches.
-			const homeDisallowedTools = this.config.workingDirectory
-				? buildHomeDirectoryDisallowedTools(
-						this.config.workingDirectory,
-						this.config.allowedDirectories ?? [],
-					)
-				: [];
+			//
+			// Skipped entirely when `unrestrictedFilesystemAccess` is set: that
+			// mode intentionally grants the session read/write access to the
+			// whole host (e.g. the Feishu full-access front door).
+			const homeDisallowedTools =
+				this.config.workingDirectory &&
+				!this.config.unrestrictedFilesystemAccess
+					? buildHomeDirectoryDisallowedTools(
+							this.config.workingDirectory,
+							this.config.allowedDirectories ?? [],
+						)
+					: [];
 
 			// Merge config-level denials with home directory denials, deduplicating in case
 			// any paths appear in both (e.g. an allowedDirectory that is also explicitly denied).

@@ -64,6 +64,63 @@ describe("RunnerConfigBuilder.buildChatConfig", () => {
 		]);
 	});
 
+	it("full-access chat sessions get the full tool set and unrestricted host filesystem access", () => {
+		const seenArgs: Array<unknown[]> = [];
+		const chatToolResolver: IChatToolResolver = {
+			buildChatAllowedTools: (...args) => {
+				seenArgs.push(args);
+				const fullAccess = args[2];
+				return fullAccess ? ["Read(**)", "Write(**)", "Bash"] : ["Read(**)"];
+			},
+		};
+		const builder = new RunnerConfigBuilder(
+			chatToolResolver,
+			{ buildMcpConfig: () => ({}), buildMergedMcpConfigPath: () => undefined },
+			{
+				determineRunnerSelection: () => ({ runnerType: "claude" as const }),
+				getDefaultModelForRunner: () => "",
+				getDefaultFallbackModelForRunner: () => "",
+			},
+		);
+
+		const config = builder.buildChatConfig({
+			workspacePath: "/tmp/feishu-workspace",
+			workspaceName: "feishu-thread-x",
+			systemPrompt: "test",
+			sessionId: "sess-1",
+			cyrusHome: "/tmp/cyrus-home-test",
+			platformName: "feishu",
+			fullAccess: true,
+			logger: silentLogger,
+			onMessage: () => {},
+			onError: () => {},
+		});
+
+		// fullAccess must be forwarded to the tool resolver so it swaps in the full set.
+		expect(seenArgs[0]?.[2]).toBe(true);
+		expect(config.allowedTools).toEqual(["Read(**)", "Write(**)", "Bash"]);
+		// And the runner must be told to skip the home-directory read restrictions.
+		expect(config.unrestrictedFilesystemAccess).toBe(true);
+	});
+
+	it("non-full-access chat sessions do NOT set unrestrictedFilesystemAccess", () => {
+		const builder = makeBuilder();
+
+		const config = builder.buildChatConfig({
+			workspacePath: "/tmp/slack-workspace",
+			workspaceName: "slack-thread-x",
+			systemPrompt: "test",
+			sessionId: "sess-1",
+			cyrusHome: "/tmp/cyrus-home-test",
+			platformName: "slack",
+			logger: silentLogger,
+			onMessage: () => {},
+			onError: () => {},
+		});
+
+		expect(config.unrestrictedFilesystemAccess).toBeUndefined();
+	});
+
 	it("passes managed skill plugins and scoped skill names to chat runner configs", () => {
 		const builder = makeBuilder();
 		const plugins = [{ type: "local" as const, path: "/cyrus/user-skills" }];

@@ -36,6 +36,14 @@ export interface ClaudeRunnerConfig {
 	 * that makes repo-local skills in multi-repo sub-worktrees discoverable.
 	 */
 	additionalDirectories?: string[];
+	/**
+	 * When true, skip the home-directory read restrictions that normally deny
+	 * Read access to everything under `~/` outside the working directory and
+	 * `allowedDirectories`. Combined with a full tool set, this grants the
+	 * session unrestricted read/write/exec access to the host filesystem.
+	 * Enabled by the Feishu full-access front door (`FEISHU_FULL_ACCESS`).
+	 */
+	unrestrictedFilesystemAccess?: boolean;
 	resumeSessionId?: string; // Session ID to resume from previous Claude session
 	workspaceName?: string;
 	systemPrompt?: string;

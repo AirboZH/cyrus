@@ -1234,6 +1234,16 @@ export class EdgeWorker extends EventEmitter {
 		const feishuAppId = process.env.FEISHU_APP_ID;
 		const feishuAppSecret = process.env.FEISHU_APP_SECRET;
 		const feishuBaseUrl = process.env.FEISHU_BASE_URL;
+		// Opt-in full-access mode: run Feishu chat sessions as a full-capability
+		// agent (complete tool set + unrestricted host filesystem access) rather
+		// than the read-only chat default. SECURITY: anyone who can message the
+		// bot can then run arbitrary commands as this host's user.
+		const feishuFullAccess = process.env.FEISHU_FULL_ACCESS === "true";
+		if (feishuFullAccess) {
+			this.logger.warn(
+				"FEISHU_FULL_ACCESS is enabled — Feishu sessions run with the full tool set and unrestricted host filesystem access. Anyone who can message the bot can run arbitrary commands as this host's user.",
+			);
+		}
 		if (feishuAppId && feishuAppSecret) {
 			this.feishuTokenProvider = new FeishuTokenProvider({
 				appId: feishuAppId,
@@ -1258,6 +1268,7 @@ export class EdgeWorker extends EventEmitter {
 				repositoryRoutingContext: routingContext,
 				cyrusAppBaseUrl,
 				apiBaseUrl: feishuBaseUrl,
+				fullAccess: feishuFullAccess,
 			},
 		);
 
@@ -1285,6 +1296,7 @@ export class EdgeWorker extends EventEmitter {
 			// Feishu has no per-platform custom MCP config list yet; chat sessions
 			// still load the native servers (Linear, cyrus-tools, cyrus-docs).
 			getPlatformMcpConfigOverrides: () => undefined,
+			fullAccess: feishuFullAccess,
 			resolveSkillsConfig: async ({ repository, repositoryPaths }) => {
 				const plugins = await this.skillsPluginResolver.resolve();
 				const skills = await this.skillsPluginResolver.discoverSkillNames(
