@@ -235,12 +235,7 @@ Supported:
 	}
 
 	async fetchThreadContext(event: FeishuWebhookEvent): Promise<string> {
-		// Only Feishu native threads (thread_id) can be listed for prior context.
-		const threadId = event.payload.threadId;
-		if (!threadId) {
-			return "";
-		}
-
+		const { payload } = event;
 		const token = await this.getToken();
 		if (!token) {
 			this.logger.warn(
@@ -249,24 +244,90 @@ Supported:
 			return "";
 		}
 
-		try {
-			const service = new FeishuMessageService(this.apiBaseUrl);
-			const messages = await service.fetchThreadMessages({
-				token,
-				threadId,
-				limit: 50,
-			});
-			if (messages.length === 0) {
-				return "";
+		const botOpenId = this.tokenProvider?.getCachedBotOpenId();
+		const service = new FeishuMessageService(this.apiBaseUrl);
+
+		// A native Feishu thread (topic group, or a reply_in_thread chain) can be
+		// listed wholesale — that listing already includes any replied-to message.
+		if (payload.threadId) {
+			try {
+				const messages = await service.fetchThreadMessages({
+					token,
+					threadId: payload.threadId,
+					limit: 50,
+				});
+				if (messages.length > 0) {
+					return this.formatThreadContext(messages, botOpenId);
+				}
+			} catch (error) {
+				this.logger.warn(
+					`Failed to fetch Feishu thread context: ${error instanceof Error ? error.message : String(error)}`,
+				);
 			}
-			const botOpenId = this.tokenProvider?.getCachedBotOpenId();
-			return this.formatThreadContext(messages, botOpenId);
-		} catch (error) {
-			this.logger.warn(
-				`Failed to fetch Feishu thread context: ${error instanceof Error ? error.message : String(error)}`,
-			);
+			// Fall through: the thread listing was empty or failed — still try to
+			// resolve the specific replied-to message below.
+		}
+
+		// Plain reply (回复) to a specific message: there is no thread_id, but the
+		// event carries parent_id (the message directly replied to) and root_id
+		// (the conversation root). Fetch those so the agent can see the message
+		// the user is referring to — e.g. "@bot do what <that message> said".
+		return this.fetchRepliedToContext(payload, token, service, botOpenId);
+	}
+
+	/**
+	 * Resolve the message(s) a reply points at (parent_id + root_id) into a
+	 * formatted context block. Best-effort: any message that can't be read
+	 * (deleted, no permission, non-text) is skipped, and an empty string is
+	 * returned when nothing resolves.
+	 */
+	private async fetchRepliedToContext(
+		payload: FeishuWebhookEvent["payload"],
+		token: string,
+		service: FeishuMessageService,
+		botOpenId?: string,
+	): Promise<string> {
+		// The message directly replied to, plus the conversation root when it is
+		// a distinct message. Deduped, and never the triggering message itself.
+		const referencedIds: string[] = [];
+		for (const id of [payload.parentId, payload.rootId]) {
+			if (id && id !== payload.messageId && !referencedIds.includes(id)) {
+				referencedIds.push(id);
+			}
+		}
+		if (referencedIds.length === 0) {
 			return "";
 		}
+
+		const messages: FeishuThreadMessage[] = [];
+		for (const id of referencedIds) {
+			try {
+				const message = await service.fetchMessage({ token, messageId: id });
+				if (message) {
+					messages.push(message);
+				}
+			} catch (error) {
+				this.logger.warn(
+					`Failed to fetch replied-to Feishu message ${id}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+		if (messages.length === 0) {
+			return "";
+		}
+
+		// Present oldest first (root before the message directly replied to).
+		messages.sort(
+			(a, b) => Number(a.createTime ?? 0) - Number(b.createTime ?? 0),
+		);
+
+		const formatted = messages
+			.map((message) => this.formatMessageBlock(message, botOpenId))
+			.join("\n");
+		return `<feishu_replied_to_context>
+  The user's message is a reply to the following message(s). Treat them as the context the user is referring to.
+${formatted}
+</feishu_replied_to_context>`;
 	}
 
 	async postReply(
@@ -405,20 +466,26 @@ Supported:
 		botOpenId?: string,
 	): string {
 		const formattedMessages = messages
-			.map((msg) => {
-				const isSelf =
-					(botOpenId && msg.senderId === botOpenId) || msg.senderType === "app";
-				const author = isSelf ? "assistant (you)" : (msg.senderId ?? "unknown");
-				return `  <message>
+			.map((msg) => this.formatMessageBlock(msg, botOpenId))
+			.join("\n");
+
+		return `<feishu_thread_context>\n${formattedMessages}\n</feishu_thread_context>`;
+	}
+
+	/** Render a single thread/replied-to message as an XML `<message>` block. */
+	private formatMessageBlock(
+		msg: FeishuThreadMessage,
+		botOpenId?: string,
+	): string {
+		const isSelf =
+			(botOpenId && msg.senderId === botOpenId) || msg.senderType === "app";
+		const author = isSelf ? "assistant (you)" : (msg.senderId ?? "unknown");
+		return `  <message>
     <author>${author}</author>
     <timestamp>${msg.createTime ?? ""}</timestamp>
     <content>
 ${msg.text}
     </content>
   </message>`;
-			})
-			.join("\n");
-
-		return `<feishu_thread_context>\n${formattedMessages}\n</feishu_thread_context>`;
 	}
 }

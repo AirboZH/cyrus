@@ -192,6 +192,68 @@ describe("FeishuChatAdapter integration with ChatSessionHandler", () => {
 		expect(prompt).toContain("mcp__linear__save_issue");
 	});
 
+	it("reply-to-message @mention pulls in the replied-to message as context", async () => {
+		// B replies to A's message and @mentions the bot. The event carries
+		// parent_id/root_id (A's message) but no thread_id, so the agent must
+		// fetch A's content directly to know what "do what A said" refers to.
+		const fetchMessage = vi
+			.spyOn(FeishuMessageService.prototype, "fetchMessage")
+			.mockResolvedValue({
+				messageId: "om_A",
+				senderId: "ou_author",
+				senderType: "user",
+				messageType: "text",
+				text: "Please refactor the auth module",
+				createTime: "1700000000000",
+			});
+
+		const adapter = new FeishuChatAdapter(
+			createStaticProvider(),
+			createMockTokenProvider(),
+		);
+
+		const context = await adapter.fetchThreadContext(
+			mentionEvent({
+				messageId: "om_B",
+				parentId: "om_A",
+				rootId: "om_A",
+				text: "@Cyrus complete what this message asked",
+			}),
+		);
+
+		expect(fetchMessage).toHaveBeenCalledWith({
+			token: "t_test",
+			messageId: "om_A",
+		});
+		// root_id === parent_id, so A is fetched exactly once.
+		expect(fetchMessage).toHaveBeenCalledTimes(1);
+		expect(context).toContain("<feishu_replied_to_context>");
+		expect(context).toContain("Please refactor the auth module");
+		expect(context).toContain("ou_author");
+	});
+
+	it("plain @mention with no thread and no reply target fetches nothing", async () => {
+		const fetchMessage = vi.spyOn(
+			FeishuMessageService.prototype,
+			"fetchMessage",
+		);
+		const fetchThread = vi.spyOn(
+			FeishuMessageService.prototype,
+			"fetchThreadMessages",
+		);
+
+		const adapter = new FeishuChatAdapter(
+			createStaticProvider(),
+			createMockTokenProvider(),
+		);
+
+		const context = await adapter.fetchThreadContext(mentionEvent());
+
+		expect(context).toBe("");
+		expect(fetchMessage).not.toHaveBeenCalled();
+		expect(fetchThread).not.toHaveBeenCalled();
+	});
+
 	it("@mention creates a session and threads the agent's reply back to Feishu", async () => {
 		const reply = vi
 			.spyOn(FeishuMessageService.prototype, "replyMessage")

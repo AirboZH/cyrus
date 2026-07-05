@@ -69,6 +69,61 @@ describe("FeishuMessageService", () => {
 		).rejects.toThrow(/code=230001/);
 	});
 
+	it("fetchMessage GETs a single message by id and decodes its text", async () => {
+		const fetchMock = mockFetchOnce({
+			code: 0,
+			data: {
+				items: [
+					{
+						message_id: "om_parent",
+						msg_type: "text",
+						create_time: "1700000000000",
+						sender: { id: "ou_author", sender_type: "user" },
+						body: { content: JSON.stringify({ text: "the original ask" }) },
+					},
+				],
+			},
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const message = await new FeishuMessageService().fetchMessage({
+			token: "t_abc",
+			messageId: "om_parent",
+		});
+
+		const [url, init] = fetchMock.mock.calls[0];
+		expect(url).toBe(`${BASE}/im/v1/messages/om_parent`);
+		expect(init.method).toBe("GET");
+		expect(init.headers.Authorization).toBe("Bearer t_abc");
+		expect(message).toMatchObject({
+			messageId: "om_parent",
+			senderId: "ou_author",
+			text: "the original ask",
+		});
+	});
+
+	it("fetchMessage returns null when the message has no readable text", async () => {
+		const fetchMock = mockFetchOnce({
+			code: 0,
+			data: {
+				items: [
+					{
+						message_id: "om_img",
+						msg_type: "image",
+						body: { content: JSON.stringify({ image_key: "img_x" }) },
+					},
+				],
+			},
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const message = await new FeishuMessageService().fetchMessage({
+			token: "t",
+			messageId: "om_img",
+		});
+		expect(message).toBeNull();
+	});
+
 	it("fetchThreadMessages lists and decodes thread text", async () => {
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: true,

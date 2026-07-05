@@ -60,6 +60,16 @@ export interface FeishuSendMessageParams {
 }
 
 /**
+ * Parameters for fetching a single Feishu message by ID.
+ */
+export interface FeishuFetchMessageParams {
+	/** Feishu tenant_access_token */
+	token: string;
+	/** ID of the message to fetch (e.g. "om_...") */
+	messageId: string;
+}
+
+/**
  * Parameters for listing messages in a Feishu thread.
  */
 export interface FeishuFetchThreadParams {
@@ -140,6 +150,67 @@ export class FeishuMessageService {
 			msg_type: "text",
 			content: JSON.stringify({ text }),
 		});
+	}
+
+	/**
+	 * Fetch a single Feishu message by its ID — used to pull in the
+	 * replied-to / parent message when a user replies to a specific message
+	 * and @mentions the bot (a plain 回复 carries `parent_id`/`root_id` but no
+	 * `thread_id`, so it can't be listed via {@link fetchThreadMessages}).
+	 *
+	 * Returns null when the message has no readable text (empty, non-text
+	 * type, deleted, or not present in the response).
+	 *
+	 * @see https://open.feishu.cn/document/server-docs/im-v1/message/get
+	 */
+	async fetchMessage(
+		params: FeishuFetchMessageParams,
+	): Promise<FeishuThreadMessage | null> {
+		const { token, messageId } = params;
+		const url = `${this.apiBaseUrl}/im/v1/messages/${encodeURIComponent(messageId)}`;
+
+		const response = await fetch(url, {
+			method: "GET",
+			headers: { Authorization: `Bearer ${token}` },
+		});
+
+		if (!response.ok) {
+			const errorBody = await response.text();
+			throw new Error(
+				`[FeishuMessageService] Failed to fetch message ${messageId}: ${response.status} ${response.statusText} - ${errorBody}`,
+			);
+		}
+
+		const body = (await response.json()) as {
+			code: number;
+			msg?: string;
+			data?: { items?: FeishuRawListMessage[] };
+		};
+
+		if (body.code !== 0) {
+			throw new Error(
+				`[FeishuMessageService] Feishu API error (fetchMessage): code=${body.code} msg=${body.msg ?? "unknown"}`,
+			);
+		}
+
+		const item = body.data?.items?.[0];
+		if (!item) {
+			return null;
+		}
+
+		const text = decodeListMessageText(item.msg_type, item.body?.content);
+		if (!text) {
+			return null;
+		}
+
+		return {
+			messageId: item.message_id ?? messageId,
+			senderId: item.sender?.id,
+			senderType: item.sender?.sender_type,
+			messageType: item.msg_type ?? "text",
+			text,
+			createTime: item.create_time,
+		};
 	}
 
 	/**
