@@ -253,6 +253,7 @@ export type {
 	SerializableEdgeWorkerState,
 	SerializedCyrusAgentSession,
 	SerializedCyrusAgentSessionEntry,
+	SerializedFeishuIssueBinding,
 	V3SerializableEdgeWorkerState,
 } from "./PersistenceManager.js";
 export {

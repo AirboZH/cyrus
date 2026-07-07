@@ -21,6 +21,46 @@ export type SerializedCyrusAgentSession = CyrusAgentSession;
 // }
 
 export type SerializedCyrusAgentSessionEntry = CyrusAgentSessionEntry;
+
+/**
+ * Durable mapping of a Linear issue created from a Feishu (Lark) thread back to
+ * its originating thread, so that when the issue is later completed in Linear we
+ * can post a completion notice into the exact same Feishu thread and address the
+ * person who requested it.
+ *
+ * Keyed (in {@link SerializableEdgeWorkerState.feishuIssueNotifications}) by the
+ * Linear issue's human identifier (e.g. "IN-42"): it is present both when the
+ * issue is captured (parsed from the created issue's URL) and on the completion
+ * webhook (`data.identifier`), whereas the UUID is not always present in the MCP
+ * tool result. The UUID, when known, is retained in {@link issueId} for a
+ * fallback lookup.
+ */
+export interface SerializedFeishuIssueBinding {
+	/** Linear issue human identifier, e.g. "IN-42" (the map key). */
+	issueIdentifier: string;
+	/** Linear issue UUID, when it could be resolved (used as a fallback key). */
+	issueId?: string;
+	/** Issue title captured at creation time (best-effort). */
+	issueTitle?: string;
+	/** Linear issue URL captured at creation time (best-effort). */
+	issueUrl?: string;
+	/** Feishu chat id (e.g. "oc_...") the task was requested in. */
+	chatId: string;
+	/** Requester's Feishu open_id (e.g. "ou_..."). */
+	openId: string;
+	/** Requester's display name, when it was resolved. */
+	userName?: string;
+	/**
+	 * Feishu thread-root message id (e.g. "om_...") to reply to. Replying to this
+	 * with `reply_in_thread: true` keeps the completion notice inside the topic.
+	 */
+	rootMessageId: string;
+	/**
+	 * Epoch milliseconds when a completion notice was successfully posted. Absent
+	 * until notified; its presence makes completion notifications idempotent.
+	 */
+	notifiedAt?: number;
+}
 // extends Omit<CyrusAgentSessionEntry, 'metadata'> {
 //   metadata?: Omit<CyrusAgentSessionEntry['metadata'], 'timestamp'> & {
 //     timestamp?: string
@@ -64,6 +104,9 @@ export interface SerializableEdgeWorkerState {
 	// Issue to repository mapping (for caching user repository selections)
 	// v4.1: string[] (multi-repo). Migration: old Record<string, string> auto-converts.
 	issueRepositoryCache?: Record<string, string[]>;
+	// Feishu-originated issue → thread bindings, keyed by Linear issue identifier
+	// (e.g. "IN-42"), used to notify the requester's thread when the issue completes.
+	feishuIssueNotifications?: Record<string, SerializedFeishuIssueBinding>;
 }
 
 /**
