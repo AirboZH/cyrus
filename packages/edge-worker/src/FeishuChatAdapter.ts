@@ -12,6 +12,17 @@ import {
 } from "cyrus-feishu-event-transport";
 import type { ChatRepositoryProvider } from "./ChatRepositoryProvider.js";
 import type { ChatPlatformAdapter } from "./ChatSessionHandler.js";
+import type { FeishuIssueBindingInput } from "./FeishuIssueNotificationService.js";
+
+/** Full tool name the Feishu agent uses to create Linear issues. */
+const LINEAR_SAVE_ISSUE_TOOL = "mcp__linear__save_issue";
+
+/**
+ * Matches a Linear issue URL and captures the issue identifier (e.g. "IN-42").
+ * Used to recover the created issue's identifier/URL from a `save_issue` result.
+ */
+const LINEAR_ISSUE_URL_RE =
+	/https?:\/\/linear\.app\/[^\s"')]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)(?:\/[^\s"')]*)?/i;
 
 /**
  * Sentinel the agent emits when it has decided a Feishu message does not warrant
@@ -50,6 +61,9 @@ export class FeishuChatAdapter
 	private behavioursPageUrl: string;
 	private apiBaseUrl: string | undefined;
 	private fullAccess: boolean;
+	private onIssueCreated:
+		| ((binding: FeishuIssueBindingInput) => void)
+		| undefined;
 	private logger: ILogger;
 	/**
 	 * Maps a Feishu messageId to the reaction_id of its "OnIt" (working) receipt
@@ -82,11 +96,19 @@ export class FeishuChatAdapter
 			 * open_ids.
 			 */
 			userDirectory?: FeishuUserDirectory;
+			/**
+			 * Invoked (best-effort) once per turn for each Linear issue the agent
+			 * created via `mcp__linear__save_issue`, carrying the source thread
+			 * context. Lets the owner persist a Feishu→Linear binding so the thread
+			 * can be notified when that issue is later completed.
+			 */
+			onIssueCreated?: (binding: FeishuIssueBindingInput) => void;
 		},
 	) {
 		this.repositoryProvider = repositoryProvider;
 		this.tokenProvider = tokenProvider;
 		this.userDirectory = options?.userDirectory;
+		this.onIssueCreated = options?.onIssueCreated;
 		this.repositoryRoutingContext =
 			options?.repositoryRoutingContext?.trim() || "";
 		const appBaseUrl = options?.cyrusAppBaseUrl?.trim().replace(/\/+$/, "");
@@ -363,6 +385,13 @@ ${formatted}
 	): Promise<void> {
 		try {
 			const messages = runner.getMessages();
+
+			// Capture any Linear issues the agent created this turn so the thread
+			// can be notified on completion. Runs regardless of whether we end up
+			// replying (e.g. the no-response sentinel below), and never breaks the
+			// reply path — capture failures are logged, not thrown.
+			this.captureCreatedIssues(event, messages);
+
 			const lastAssistantMessage = [...messages]
 				.reverse()
 				.find((m) => m.type === "assistant");
@@ -415,6 +444,44 @@ ${formatted}
 			this.logger.error(
 				"Failed to post Feishu reply",
 				error instanceof Error ? error : new Error(String(error)),
+			);
+		}
+	}
+
+	/**
+	 * Inspect this turn's messages for `mcp__linear__save_issue` calls and, for
+	 * each successfully-created issue, hand a Feishu→Linear binding to the
+	 * configured {@link onIssueCreated} callback. Best-effort: no callback, no
+	 * created issue, or a parse miss simply records nothing.
+	 */
+	private captureCreatedIssues(
+		event: FeishuWebhookEvent,
+		messages: ReturnType<IAgentRunner["getMessages"]>,
+	): void {
+		if (!this.onIssueCreated) {
+			return;
+		}
+		try {
+			const created = extractCreatedLinearIssues(messages);
+			if (created.length === 0) {
+				return;
+			}
+			const rootMessageId = feishuThreadRoot(event.payload);
+			for (const issue of created) {
+				this.onIssueCreated({
+					issueIdentifier: issue.issueIdentifier,
+					issueId: issue.issueId,
+					issueTitle: issue.issueTitle,
+					issueUrl: issue.issueUrl,
+					chatId: event.payload.chatId,
+					openId: event.payload.user,
+					userName: event.payload.userName,
+					rootMessageId,
+				});
+			}
+		} catch (error) {
+			this.logger.warn(
+				`Failed to capture created Linear issue from Feishu session: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
 	}
@@ -582,4 +649,170 @@ ${msg.text}
     </content>
   </message>`;
 	}
+}
+
+/** A Linear issue recovered from a `mcp__linear__save_issue` tool result. */
+export interface CapturedLinearIssue {
+	/** Linear issue identifier, e.g. "IN-42". */
+	issueIdentifier: string;
+	/** Linear issue UUID, when present in the result. */
+	issueId?: string;
+	/** Issue title (from the tool input, or the result when present). */
+	issueTitle?: string;
+	/** Linear issue URL, when present in the result. */
+	issueUrl?: string;
+}
+
+/** Flatten a tool_result `content` (string or content-block array) to text. */
+function toolResultText(content: unknown): string {
+	if (typeof content === "string") {
+		return content;
+	}
+	if (Array.isArray(content)) {
+		return content
+			.map((block) =>
+				block &&
+				typeof block === "object" &&
+				(block as { type?: string }).type === "text" &&
+				typeof (block as { text?: unknown }).text === "string"
+					? (block as { text: string }).text
+					: "",
+			)
+			.filter(Boolean)
+			.join("\n");
+	}
+	return "";
+}
+
+/**
+ * Parse a `save_issue` tool result into the created issue's identifying fields.
+ *
+ * The official Linear MCP returns the issue's URL (and often a JSON body); this
+ * recovers the identifier/URL/UUID robustly from either JSON or plain text.
+ * Returns undefined when no issue identifier can be recovered.
+ */
+function parseIssueFromResult(text: string): CapturedLinearIssue | undefined {
+	let identifier: string | undefined;
+	let id: string | undefined;
+	let url: string | undefined;
+	let title: string | undefined;
+
+	const trimmed = text.trim();
+	if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+		try {
+			const json = JSON.parse(trimmed) as unknown;
+			const root = Array.isArray(json) ? json[0] : json;
+			const obj = root as { issue?: unknown } & Record<string, unknown>;
+			const issue = (obj?.issue ?? obj) as Record<string, unknown> | undefined;
+			if (issue && typeof issue === "object") {
+				if (typeof issue.identifier === "string") identifier = issue.identifier;
+				if (typeof issue.id === "string") id = issue.id;
+				if (typeof issue.url === "string") url = issue.url;
+				if (typeof issue.title === "string") title = issue.title;
+			}
+		} catch {
+			// Not JSON — fall through to regex extraction.
+		}
+	}
+
+	const urlMatch = text.match(LINEAR_ISSUE_URL_RE);
+	if (urlMatch) {
+		if (!url) url = urlMatch[0];
+		if (!identifier) identifier = urlMatch[1];
+	}
+
+	if (!identifier) {
+		const idMatch = text.match(/\b([A-Z][A-Z0-9]*-\d+)\b/);
+		if (idMatch) identifier = idMatch[1];
+	}
+
+	if (!id) {
+		const uuidMatch = text.match(
+			/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i,
+		);
+		if (uuidMatch) id = uuidMatch[0];
+	}
+
+	if (!identifier) {
+		return undefined;
+	}
+	return {
+		issueIdentifier: identifier,
+		issueId: id,
+		issueUrl: url,
+		issueTitle: title,
+	};
+}
+
+/**
+ * Extract the Linear issues created via `mcp__linear__save_issue` in a run's
+ * message stream. Correlates each successful (non-error) tool result with its
+ * originating tool call to recover the created issue, deduping by identifier.
+ *
+ * Exported for unit testing. Tolerates loosely-typed SDK message shapes.
+ */
+export function extractCreatedLinearIssues(
+	messages: ReturnType<IAgentRunner["getMessages"]>,
+): CapturedLinearIssue[] {
+	// tool_use_id → title from the save_issue call input (best-effort fallback).
+	const saveIssueCalls = new Map<string, { title?: string }>();
+	for (const message of messages) {
+		const msg = message as {
+			type?: string;
+			message?: { content?: unknown };
+		};
+		if (msg.type !== "assistant" || !Array.isArray(msg.message?.content)) {
+			continue;
+		}
+		for (const block of msg.message.content as Array<Record<string, unknown>>) {
+			if (
+				block?.type === "tool_use" &&
+				block.name === LINEAR_SAVE_ISSUE_TOOL &&
+				typeof block.id === "string"
+			) {
+				const input = block.input as { title?: unknown } | undefined;
+				saveIssueCalls.set(block.id, {
+					title: typeof input?.title === "string" ? input.title : undefined,
+				});
+			}
+		}
+	}
+	if (saveIssueCalls.size === 0) {
+		return [];
+	}
+
+	const results: CapturedLinearIssue[] = [];
+	const seen = new Set<string>();
+	for (const message of messages) {
+		const msg = message as {
+			type?: string;
+			message?: { content?: unknown };
+		};
+		if (msg.type !== "user" || !Array.isArray(msg.message?.content)) {
+			continue;
+		}
+		for (const block of msg.message.content as Array<Record<string, unknown>>) {
+			if (block?.type !== "tool_result") {
+				continue;
+			}
+			const toolUseId = block.tool_use_id;
+			if (typeof toolUseId !== "string") {
+				continue;
+			}
+			const call = saveIssueCalls.get(toolUseId);
+			if (!call || block.is_error === true) {
+				continue;
+			}
+			const parsed = parseIssueFromResult(toolResultText(block.content));
+			if (!parsed || seen.has(parsed.issueIdentifier)) {
+				continue;
+			}
+			seen.add(parsed.issueIdentifier);
+			results.push({
+				...parsed,
+				issueTitle: parsed.issueTitle ?? call.title,
+			});
+		}
+	}
+	return results;
 }

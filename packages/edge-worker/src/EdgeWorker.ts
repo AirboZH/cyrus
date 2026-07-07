@@ -80,6 +80,7 @@ import {
 import { CursorRunner } from "cyrus-cursor-runner";
 import {
 	FeishuEventTransport,
+	FeishuMessageService,
 	FeishuTokenProvider,
 	FeishuUserDirectory,
 	type FeishuWebhookEvent,
@@ -157,6 +158,10 @@ import { ConfigManager, type RepositoryChanges } from "./ConfigManager.js";
 import { DefaultSkillsDeployer } from "./DefaultSkillsDeployer.js";
 import { EgressProxy } from "./EgressProxy.js";
 import { FeishuChatAdapter } from "./FeishuChatAdapter.js";
+import {
+	FeishuIssueNotificationService,
+	type FeishuThreadNotifier,
+} from "./FeishuIssueNotificationService.js";
 import { GitService } from "./GitService.js";
 import { GlobalSessionRegistry } from "./GlobalSessionRegistry.js";
 import { McpConfigService } from "./McpConfigService.js";
@@ -232,6 +237,12 @@ export class EdgeWorker extends EventEmitter {
 	private feishuUserDirectory: FeishuUserDirectory | null = null;
 	private feishuChatSessionHandler: ChatSessionHandler<FeishuWebhookEvent> | null =
 		null;
+	/**
+	 * Tracks Linear issues created from Feishu threads and notifies the thread
+	 * when they complete. Always constructed (so persisted bindings can be
+	 * restored) even when Feishu credentials are absent.
+	 */
+	private feishuIssueNotifier: FeishuIssueNotificationService;
 	private gitHubCommentService: GitHubCommentService; // Service for posting comments back to GitHub PRs
 	private gitLabCommentService: GitLabCommentService; // Service for posting comments back to GitLab MRs
 	private cliRPCServer: CLIRPCServer | null = null; // CLI RPC server for CLI platform mode
@@ -339,6 +350,18 @@ export class EdgeWorker extends EventEmitter {
 		this.persistenceManager = new PersistenceManager(
 			join(this.cyrusHome, "state"),
 		);
+
+		// Notifies the originating Feishu thread when an issue it created completes
+		// in Linear. Constructed unconditionally so persisted bindings restore even
+		// before (or without) the Feishu transport; the sender resolves the tenant
+		// token and base URL lazily at post time.
+		this.feishuIssueNotifier = new FeishuIssueNotificationService({
+			notifier: (params) => this.postFeishuThreadNotice(params),
+			onChange: () => {
+				void this.savePersistedState();
+			},
+			logger: this.logger,
+		});
 
 		// Mirror Claude SDK session transcripts to the hosted control plane
 		// when CYRUS_API_KEY (proof of team ownership) and CYRUS_TEAM_ID
@@ -1207,6 +1230,30 @@ export class EdgeWorker extends EventEmitter {
 	}
 
 	/**
+	 * Post a completion notice into a Feishu thread by replying to its root
+	 * message with `reply_in_thread: true`, keeping the notice inside the topic.
+	 * Backs {@link feishuIssueNotifier}; throws when no tenant token is available
+	 * so the notification isn't marked delivered.
+	 */
+	private postFeishuThreadNotice: FeishuThreadNotifier = async ({
+		rootMessageId,
+		text,
+	}) => {
+		const token = await this.feishuTokenProvider?.getTenantAccessToken();
+		if (!token) {
+			throw new Error(
+				"Cannot post Feishu completion notice: no tenant_access_token available",
+			);
+		}
+		await new FeishuMessageService(process.env.FEISHU_BASE_URL).replyMessage({
+			token,
+			messageId: rootMessageId,
+			text,
+			replyInThread: true,
+		});
+	};
+
+	/**
 	 * Register the Feishu (Lark) event transport for receiving Feishu webhook
 	 * events. This creates a /feishu-webhook endpoint that handles @mention
 	 * events from Feishu groups and direct messages.
@@ -1277,6 +1324,8 @@ export class EdgeWorker extends EventEmitter {
 				apiBaseUrl: feishuBaseUrl,
 				fullAccess: feishuFullAccess,
 				userDirectory: this.feishuUserDirectory ?? undefined,
+				onIssueCreated: (binding) =>
+					this.feishuIssueNotifier.recordIssueBinding(binding),
 			},
 		);
 
@@ -4133,10 +4182,14 @@ ${taskSection}`;
 
 		// Fetch the issue to check its current state type
 		let stateType: string | undefined;
+		let issueTitle: string | undefined;
+		let issueUrl: string | undefined;
 		try {
 			const fullIssue = await issueTracker.fetchIssue(completedIssueId);
 			const state = await fullIssue.state;
 			stateType = state?.type;
+			issueTitle = fullIssue.title;
+			issueUrl = fullIssue.url;
 		} catch {
 			// Can't resolve state — skip
 			return;
@@ -4144,6 +4197,26 @@ ${taskSection}`;
 
 		if (stateType !== "completed" && stateType !== "canceled") {
 			return;
+		}
+
+		// Notify the originating Feishu thread when a Feishu-created issue is
+		// completed (Done). No-op for canceled issues and for issues that did not
+		// originate from Feishu; idempotent across repeated completion events.
+		if (stateType === "completed") {
+			try {
+				await this.feishuIssueNotifier.notifyIssueCompleted({
+					issueIdentifier,
+					issueId: completedIssueId,
+					title: issueTitle,
+					url: issueUrl,
+				});
+			} catch (error) {
+				this.logger.warn(
+					`Failed to post Feishu completion notice for ${issueIdentifier}: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				);
+			}
 		}
 
 		this.logger.debug(
@@ -7169,6 +7242,7 @@ ${input.userComment}
 			agentSessionEntries: serializedState.entries,
 			childToParentAgentSession,
 			issueRepositoryCache,
+			feishuIssueNotifications: this.feishuIssueNotifier.serialize(),
 		};
 	}
 
@@ -7238,6 +7312,16 @@ ${input.userComment}
 			this.repositoryRouter.restoreIssueRepositoryCache(cache);
 			this.logger.debug(
 				`Restored ${cache.size} issue-to-repository cache mappings`,
+			);
+		}
+
+		// Restore Feishu-originated issue → thread bindings
+		if (state.feishuIssueNotifications) {
+			this.feishuIssueNotifier.restore(state.feishuIssueNotifications);
+			this.logger.debug(
+				`Restored ${
+					Object.keys(state.feishuIssueNotifications).length
+				} Feishu issue notification binding(s)`,
 			);
 		}
 	}
