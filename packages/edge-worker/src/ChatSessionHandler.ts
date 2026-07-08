@@ -178,6 +178,29 @@ export class ChatSessionHandler<TEvent> {
 				`Processing ${this.adapter.platformName} webhook: ${this.adapter.getEventId(event)}`,
 			);
 
+			const taskInstructions = this.adapter.extractTaskInstructions(event);
+			const threadKey = this.adapter.getThreadKey(event);
+
+			// Check if there's already an active session for this thread
+			const existingSessionId = this.threadSessions.get(threadKey);
+
+			// Only events explicitly allowed to *start* a session may do so — e.g.
+			// a Slack/Feishu @mention. A plain message in an unbound thread (no
+			// existing session) must be ignored entirely: no emoji receipt, no
+			// processing. This check runs BEFORE acknowledgeReceipt so we never add
+			// an "OnIt" reaction to messages we won't act on. Already-bound threads
+			// (existingSessionId set) fall through so multi-turn conversations keep
+			// getting acknowledged and injected.
+			if (
+				!existingSessionId &&
+				this.adapter.isSessionInitiatingEvent?.(event) === false
+			) {
+				this.logger.info(
+					`Ignoring non-initiating ${this.adapter.platformName} event for unbound thread ${threadKey}`,
+				);
+				return;
+			}
+
 			// Fire-and-forget acknowledgement (e.g., emoji reaction)
 			this.adapter.acknowledgeReceipt(event).catch((err: unknown) => {
 				this.logger.warn(
@@ -185,11 +208,6 @@ export class ChatSessionHandler<TEvent> {
 				);
 			});
 
-			const taskInstructions = this.adapter.extractTaskInstructions(event);
-			const threadKey = this.adapter.getThreadKey(event);
-
-			// Check if there's already an active session for this thread
-			const existingSessionId = this.threadSessions.get(threadKey);
 			if (existingSessionId) {
 				const existingSession =
 					this.sessionManager.getSession(existingSessionId);
@@ -257,20 +275,8 @@ export class ChatSessionHandler<TEvent> {
 				);
 			}
 
-			// No session exists for this thread. Only events explicitly allowed to
-			// start a session may do so — e.g. a Slack @mention. A plain follow-up
-			// message in an unbound thread must be ignored, otherwise every message
-			// in any channel Cyrus can see would spin up a session.
-			if (
-				!existingSessionId &&
-				this.adapter.isSessionInitiatingEvent?.(event) === false
-			) {
-				this.logger.info(
-					`Ignoring non-initiating ${this.adapter.platformName} event for unbound thread ${threadKey}`,
-				);
-				return;
-			}
-
+			// No session exists for this thread (the non-initiating guard above
+			// already returned for events that may only continue a bound thread).
 			// Create an empty workspace directory for this thread
 			const workspace = await this.createWorkspace(threadKey);
 			if (!workspace) {
