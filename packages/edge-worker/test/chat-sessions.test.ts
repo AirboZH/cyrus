@@ -270,6 +270,43 @@ describe("ChatSessionHandler session-initiation gate", () => {
 		expect(handler.listThreads()).toHaveLength(0);
 	});
 
+	it("does NOT acknowledge a non-initiating event on an unbound thread", async () => {
+		const adapter: ChatPlatformAdapter<TestEvent> = new TestChatAdapter(
+			"unbound-thread",
+		);
+		// Not an @mention, and no session exists → must be ignored entirely,
+		// including no emoji receipt ("OnIt") reaction.
+		adapter.isSessionInitiatingEvent = () => false;
+		const acknowledgeReceipt = vi
+			.spyOn(adapter, "acknowledgeReceipt")
+			.mockResolvedValue(undefined);
+
+		const { handler } = buildHandler(adapter);
+		await handler.handleEvent({
+			eventId: "follow-up",
+			threadKey: "unbound-thread",
+		} as any);
+
+		expect(acknowledgeReceipt).not.toHaveBeenCalled();
+	});
+
+	it("acknowledges an initiating event (@mention starts a session)", async () => {
+		const adapter: ChatPlatformAdapter<TestEvent> = new TestChatAdapter(
+			"bound-thread",
+		);
+		adapter.isSessionInitiatingEvent = () => true;
+		const acknowledgeReceipt = vi
+			.spyOn(adapter, "acknowledgeReceipt")
+			.mockResolvedValue(undefined);
+
+		const { handler } = buildHandler(adapter);
+		const event = { eventId: "mention", threadKey: "bound-thread" };
+		await handler.handleEvent(event as any);
+
+		expect(acknowledgeReceipt).toHaveBeenCalledTimes(1);
+		expect(acknowledgeReceipt).toHaveBeenCalledWith(event);
+	});
+
 	it("starts a session for an initiating event", async () => {
 		const adapter: ChatPlatformAdapter<TestEvent> = new TestChatAdapter(
 			"bound-thread",
@@ -284,6 +321,37 @@ describe("ChatSessionHandler session-initiation gate", () => {
 
 		expect(createRunner).toHaveBeenCalledTimes(1);
 		expect(handler.listThreads()).toHaveLength(1);
+	});
+
+	it("still acknowledges a non-initiating follow-up on an already-bound thread", async () => {
+		// @mention first binds the thread; the follow-up is a plain message
+		// (isSessionInitiatingEvent === false) but must NOT be ignored — a
+		// multi-turn conversation keeps getting acknowledged and injected.
+		let initiating = true;
+		const adapter: ChatPlatformAdapter<TestEvent> = new TestChatAdapter(
+			"convo-thread",
+		);
+		adapter.isSessionInitiatingEvent = () => initiating;
+		const acknowledgeReceipt = vi
+			.spyOn(adapter, "acknowledgeReceipt")
+			.mockResolvedValue(undefined);
+
+		const { handler } = buildHandler(adapter);
+		await handler.handleEvent({
+			eventId: "mention",
+			threadKey: "convo-thread",
+		} as any);
+		expect(handler.listThreads()).toHaveLength(1);
+
+		// Subsequent plain message in the now-bound thread.
+		initiating = false;
+		await handler.handleEvent({
+			eventId: "follow-up",
+			threadKey: "convo-thread",
+		} as any);
+
+		// Both the @mention and the follow-up were acknowledged.
+		expect(acknowledgeReceipt).toHaveBeenCalledTimes(2);
 	});
 });
 
