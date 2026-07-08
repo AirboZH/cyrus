@@ -32,6 +32,7 @@ export {
 	FeishuWsClient,
 	type FeishuWsClientConfig,
 } from "./FeishuWsClient.js";
+export { containsMarkdown } from "./markdown.js";
 export {
 	type FeishuMessageEventInput,
 	type FeishuNormalizeOptions,

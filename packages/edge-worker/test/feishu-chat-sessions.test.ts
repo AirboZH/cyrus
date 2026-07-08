@@ -375,11 +375,56 @@ describe("FeishuChatAdapter integration with ChatSessionHandler", () => {
 		});
 		await new Promise((resolve) => setImmediate(resolve));
 
+		// Plain-text reply (no Markdown syntax) → ordinary text bubble, not a card.
 		expect(reply).toHaveBeenCalledTimes(1);
 		expect(reply).toHaveBeenCalledWith({
 			token: "t_test",
 			messageId: "om_1",
 			text: "Created Linear issue ENG-42 and assigned it to you.",
+			replyInThread: true,
+			format: "text",
+		});
+	});
+
+	it("threads a Markdown reply back to Feishu as an interactive card", async () => {
+		const reply = vi
+			.spyOn(FeishuMessageService.prototype, "replyMessage")
+			.mockResolvedValue(undefined);
+		vi.spyOn(FeishuReactionService.prototype, "addReaction").mockResolvedValue(
+			"react_1",
+		);
+		vi.spyOn(
+			FeishuReactionService.prototype,
+			"removeReaction",
+		).mockResolvedValue(undefined);
+
+		const adapter = new FeishuChatAdapter(
+			createStaticProvider(),
+			createMockTokenProvider(),
+		);
+		const markdownSummary =
+			"完成情况：\n- 创建了 **ENG-42**\n- 详见 [文档](https://example.com)";
+		const { createRunner, getConfig } = fakeRunner(markdownSummary);
+		const handler = buildHandler(adapter, createRunner);
+
+		await handler.handleEvent(mentionEvent());
+
+		// Drive the SDK "result" that ends the turn → triggers postReply.
+		await getConfig().onMessage({
+			type: "result",
+			subtype: "success",
+			is_error: false,
+			result: "done",
+			session_id: "session-1",
+		});
+		await new Promise((resolve) => setImmediate(resolve));
+
+		// Reply carrying Markdown syntax → interactive card path.
+		expect(reply).toHaveBeenCalledTimes(1);
+		expect(reply).toHaveBeenCalledWith({
+			token: "t_test",
+			messageId: "om_1",
+			text: markdownSummary,
 			replyInThread: true,
 			format: "markdown",
 		});

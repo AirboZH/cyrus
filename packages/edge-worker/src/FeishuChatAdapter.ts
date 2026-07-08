@@ -2,6 +2,7 @@ import type { IAgentRunner, ILogger } from "cyrus-core";
 import { createLogger } from "cyrus-core";
 import {
 	buildPromptText,
+	containsMarkdown,
 	FeishuMessageService,
 	FeishuReactionService,
 	type FeishuThreadMessage,
@@ -431,6 +432,25 @@ ${formatted}
 			}
 
 			const service = new FeishuMessageService(this.apiBaseUrl);
+
+			// Only wrap the reply in an interactive card when it actually contains
+			// Markdown syntax Feishu needs a card to render. Plain text (e.g. a bare
+			// "你好") goes out as an ordinary `msg_type: "text"` bubble instead of a
+			// card.
+			if (!containsMarkdown(summary)) {
+				await service.replyMessage({
+					token,
+					messageId: event.payload.messageId,
+					text: summary,
+					replyInThread: true,
+					format: "text",
+				});
+				this.logger.info(
+					`Posted Feishu plain-text reply to chat ${event.payload.chatId} (message ${event.payload.messageId})`,
+				);
+				return;
+			}
+
 			// Post the agent's Markdown summary as an interactive card so Feishu
 			// renders it (bold, lists, links, code, ...). If the card send fails
 			// (Feishu code!=0 or network error), fall back to a plain-text reply so
