@@ -4,6 +4,7 @@ import type { SDKMessage, SdkPluginConfig } from "cyrus-claude-runner";
 import type {
 	AgentRunnerConfig,
 	AgentSessionInfo,
+	ChannelBinding,
 	CyrusAgentSession,
 	IAgentRunner,
 	ILogger,
@@ -11,7 +12,7 @@ import type {
 	RunnerType,
 } from "cyrus-core";
 import { createLogger } from "cyrus-core";
-import { AgentSessionManager } from "./AgentSessionManager.js";
+import type { AgentSessionManager } from "./AgentSessionManager.js";
 import type { ChatRepositoryProvider } from "./ChatRepositoryProvider.js";
 import type { RunnerConfigBuilder } from "./RunnerConfigBuilder.js";
 
@@ -87,6 +88,13 @@ export interface ChatPlatformAdapter<TEvent> {
 	/** Get the unique event ID */
 	getEventId(event: TEvent): string;
 
+	/**
+	 * Build the {@link ChannelBinding} recorded on a freshly created session so
+	 * the logical session carries its originating channel's identity (IN-42 §Q1).
+	 * Optional — platforms that don't yet contribute a binding omit it.
+	 */
+	getChannelBinding?(event: TEvent): ChannelBinding | undefined;
+
 	/** Build a platform-specific system prompt */
 	buildSystemPrompt(event: TEvent): string;
 
@@ -117,10 +125,35 @@ export interface ChatPlatformAdapter<TEvent> {
 }
 
 /**
+ * Minimal channelKey ⇄ sessionId correlation surface the handler needs.
+ * Satisfied by {@link SessionCorrelationRegistry}. Kept narrow so the binding
+ * survives a process restart (the registry is persisted) and so tests can pass
+ * a lightweight fake.
+ */
+export interface ChatSessionCorrelation {
+	bind(channelKey: string, sessionId: string): void;
+	resolve(channelKey: string): string | undefined;
+}
+
+/**
  * Callbacks for EdgeWorker integration (same pattern as RepositoryRouterDeps).
  */
 export interface ChatSessionHandlerDeps {
 	cyrusHome: string;
+	/**
+	 * Shared singleton {@link AgentSessionManager} (IN-42 §5 P1). Chat sessions
+	 * are stored here — the same instance that holds Linear/GitHub sessions — so
+	 * they serialize with the rest of EdgeWorker state and survive restarts,
+	 * instead of living in a per-handler in-memory manager that was lost on exit.
+	 */
+	agentSessionManager: AgentSessionManager;
+	/**
+	 * Persisted channelKey → sessionId correlation. On create the handler binds
+	 * the thread's canonical key (and aliases) here; on a later turn — including
+	 * after a restart wiped the in-memory maps — it resolves the thread back to
+	 * its original session through this registry.
+	 */
+	correlationRegistry: ChatSessionCorrelation;
 	/** Provider for live repository paths, default repo, and workspace ID */
 	chatRepositoryProvider: ChatRepositoryProvider;
 	/** Shared RunnerConfigBuilder for constructing runner configs */
@@ -172,7 +205,13 @@ export interface ChatSessionHandlerDeps {
  */
 export class ChatSessionHandler<TEvent> {
 	private adapter: ChatPlatformAdapter<TEvent>;
+	// Shared singleton AgentSessionManager (injected via deps), NOT a private
+	// per-handler instance — see constructor / IN-42 §5 P1.
 	private sessionManager: AgentSessionManager;
+	// Persisted channelKey → sessionId correlation (injected via deps). Lets a
+	// thread re-merge to its original session after a restart clears the
+	// in-memory threadSessions/threadAliases maps below.
+	private correlationRegistry: ChatSessionCorrelation;
 	// Canonical thread key → sessionId. One entry per session (the key it was
 	// created under), so `listThreads()`/`getRunnerForThread()` stay 1:1.
 	private threadSessions: Map<string, string> = new Map();
@@ -221,11 +260,12 @@ export class ChatSessionHandler<TEvent> {
 		this.deps = deps;
 		this.logger = logger ?? createLogger({ component: "ChatSessionHandler" });
 
-		// Initialize a dedicated AgentSessionManager (not tied to any repository)
-		this.sessionManager = new AgentSessionManager(
-			undefined, // No parent session lookup
-			undefined, // No resume parent session
-		);
+		// Chat sessions live in the shared singleton AgentSessionManager (IN-42 §5
+		// P1) so they persist and restore alongside the rest of EdgeWorker state.
+		// A per-handler private manager was previously used here, but its sessions
+		// were memory-only and lost on restart.
+		this.sessionManager = deps.agentSessionManager;
+		this.correlationRegistry = deps.correlationRegistry;
 	}
 
 	/**
@@ -281,8 +321,10 @@ export class ChatSessionHandler<TEvent> {
 
 			if (existingSessionId) {
 				// Learn any new keys this event carries (e.g. a thread_id that only
-				// appeared once the topic was born) so later turns resolve directly.
+				// appeared once the topic was born) so later turns resolve directly —
+				// both in-memory and in the persisted correlation registry.
 				this.registerThreadAliases(event, existingSessionId);
+				this.bindThreadCorrelation(event, threadKey, existingSessionId);
 
 				const existingSession =
 					this.sessionManager.getSession(existingSessionId);
@@ -325,10 +367,17 @@ export class ChatSessionHandler<TEvent> {
 					return;
 				}
 
-				if (existingSession && existingRunner) {
-					// Session exists but is not running — resume with --continue
+				if (existingSession) {
+					// Session exists but is not running — resume with --continue.
+					// This covers both a completed in-process turn (runner present but
+					// idle) AND a session restored after a restart (runner stripped
+					// during serialization, so existingRunner is undefined). Either
+					// way, as long as a persisted runner session id survives we
+					// continue the SAME session rather than spawning a fresh one — the
+					// key to "same thread after restart re-merges to the original
+					// session" (IN-42 §5 P1).
 					this.logger.info(
-						`Resuming completed ${this.adapter.platformName} session ${existingSessionId} (thread ${threadKey})`,
+						`Resuming ${this.adapter.platformName} session ${existingSessionId} (thread ${threadKey}${existingRunner ? "" : ", recovered after restart"})`,
 					);
 
 					const resumeSessionId =
@@ -398,6 +447,18 @@ export class ChatSessionHandler<TEvent> {
 			// alias keys so a later turn keyed differently still finds this session.
 			this.threadSessions.set(threadKey, sessionId);
 			this.registerThreadAliases(event, sessionId);
+
+			// Persist the channel correlation so this thread re-merges to the same
+			// session after a restart (the in-memory maps above don't survive it).
+			// Binds the canonical key plus every alias key the event advertises.
+			this.bindThreadCorrelation(event, threadKey, sessionId);
+
+			// Record the originating channel identity on the logical session
+			// (IN-42 §Q1) so persisted state carries where the session came from.
+			const channelBinding = this.adapter.getChannelBinding?.(event);
+			if (channelBinding) {
+				session.channels = [channelBinding];
+			}
 
 			// Initialize session metadata
 			if (!session.metadata) {
@@ -487,31 +548,45 @@ export class ChatSessionHandler<TEvent> {
 		}
 	}
 
-	/** Returns true if any runner managed by this handler is currently busy */
+	/** Returns true if any runner for a session THIS handler owns is busy */
 	isAnyRunnerBusy(): boolean {
-		for (const runner of this.sessionManager.getAllAgentRunners()) {
-			if (runner.isRunning()) {
+		for (const sessionId of this.getOwnedSessionIds()) {
+			if (this.sessionManager.getAgentRunner(sessionId)?.isRunning()) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	/** Returns all runners managed by this handler (for shutdown) */
+	/** Returns all runners for sessions THIS handler owns (for shutdown) */
 	getAllRunners(): IAgentRunner[] {
-		return this.sessionManager.getAllAgentRunners();
+		const runners: IAgentRunner[] = [];
+		for (const sessionId of this.getOwnedSessionIds()) {
+			const runner = this.sessionManager.getAgentRunner(sessionId);
+			if (runner) {
+				runners.push(runner);
+			}
+		}
+		return runners;
 	}
 
 	/**
-	 * Expose every active chat session this handler owns, so EdgeWorker
-	 * can resolve a cwd → session bundle from outside (e.g. the
-	 * `log_failure_mode` MCP tool needs to find a Slack/GitHub chat
-	 * session's runner session id). Chat sessions live in this handler's
-	 * dedicated AgentSessionManager — they aren't reachable from
-	 * EdgeWorker's primary AgentSessionManager.
+	 * Expose every active chat session this handler owns, so EdgeWorker can
+	 * resolve a cwd → session bundle from outside (e.g. the `log_failure_mode`
+	 * MCP tool needs to find a Slack/Feishu chat session's runner session id).
+	 * Chat sessions now live in the shared singleton AgentSessionManager, so this
+	 * scopes to the ids this handler created/resolved to avoid returning
+	 * unrelated (Linear/GitHub) sessions.
 	 */
 	getAllChatSessions(): CyrusAgentSession[] {
-		return this.sessionManager.getAllSessions();
+		const sessions: CyrusAgentSession[] = [];
+		for (const sessionId of this.getOwnedSessionIds()) {
+			const session = this.sessionManager.getSession(sessionId);
+			if (session) {
+				sessions.push(session);
+			}
+		}
+		return sessions;
 	}
 
 	/**
@@ -660,6 +735,26 @@ export class ChatSessionHandler<TEvent> {
 				return sessionId;
 			}
 		}
+		// In-memory maps missed — consult the persisted correlation registry.
+		// After a restart the maps start empty, but the registry (serialized in
+		// EdgeWorker state) still knows this thread's session. Learn the hit back
+		// into threadSessions so subsequent turns resolve directly and ownership
+		// tracking (getOwnedSessionIds) sees it. Only trust bindings whose session
+		// actually survived restore — a stale binding to a purged session must not
+		// resurrect a ghost.
+		for (const key of [
+			threadKey,
+			...(this.adapter.getThreadAliasKeys?.(event) ?? []),
+		]) {
+			const sessionId = this.correlationRegistry.resolve(key);
+			if (sessionId && this.sessionManager.getSession(sessionId)) {
+				this.logger.info(
+					`Recovered ${this.adapter.platformName} thread ${threadKey} → session ${sessionId} from persisted correlation`,
+				);
+				this.threadSessions.set(threadKey, sessionId);
+				return sessionId;
+			}
+		}
 		return undefined;
 	}
 
@@ -675,6 +770,38 @@ export class ChatSessionHandler<TEvent> {
 				this.threadAliases.set(aliasKey, sessionId);
 			}
 		}
+	}
+
+	/**
+	 * Persist the thread's canonical key and every alias key into the correlation
+	 * registry, all pointing at `sessionId`. This is the durable counterpart to
+	 * {@link threadSessions}/{@link threadAliases}: those are in-memory and cleared
+	 * on restart, while the registry is serialized in EdgeWorker state, so binding
+	 * here is what lets {@link resolveThreadSession} recover the session later.
+	 */
+	private bindThreadCorrelation(
+		event: TEvent,
+		threadKey: string,
+		sessionId: string,
+	): void {
+		this.correlationRegistry.bind(threadKey, sessionId);
+		for (const aliasKey of this.adapter.getThreadAliasKeys?.(event) ?? []) {
+			this.correlationRegistry.bind(aliasKey, sessionId);
+		}
+	}
+
+	/**
+	 * Session ids this handler owns. Because the singleton
+	 * {@link AgentSessionManager} now also holds Linear/GitHub sessions, methods
+	 * that used to enumerate "all sessions in my private manager" must instead
+	 * scope to the chat sessions this handler created/resolved — otherwise
+	 * shutdown, busy checks, and cwd resolution would sweep in unrelated sessions.
+	 */
+	private getOwnedSessionIds(): Set<string> {
+		return new Set<string>([
+			...this.threadSessions.values(),
+			...this.threadAliases.values(),
+		]);
 	}
 
 	/**

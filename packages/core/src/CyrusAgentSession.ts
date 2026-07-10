@@ -33,6 +33,46 @@ export interface IssueContext {
 	issueIdentifier: string;
 }
 
+/**
+ * A binding between a logical {@link CyrusAgentSession} and one external
+ * channel that feeds messages into it (IN-42 §Q1 / §5 P1).
+ *
+ * A single logical session can be addressed from multiple channels — e.g. a
+ * Linear agent session whose follow-ups also arrive from a Feishu thread. Each
+ * channel it is reachable from contributes one binding. The union is
+ * discriminated by `kind`; add a new member per channel type rather than
+ * overloading existing fields.
+ *
+ * This is pure data (fully serializable) and additive: `issueContext` /
+ * `externalSessionId` remain the "primary channel" for backward compatibility,
+ * and `channels[]` is overlay information. Sessions persisted before this field
+ * existed are migrated by backfilling one binding from their existing fields
+ * (see AgentSessionManager.restoreState).
+ */
+export type ChannelBinding =
+	| {
+			kind: "linear";
+			/** Linear AgentSession id (matches CyrusAgentSession.externalSessionId) */
+			externalSessionId: string;
+			issueId: string;
+			issueIdentifier: string;
+	  }
+	| {
+			kind: "feishu";
+			chatId: string;
+			/** Stable thread root key (canonical thread identity) */
+			threadRoot: string;
+			/** Root message id used to reply back into the thread */
+			rootMessageId: string;
+			/** open_id of the requesting Feishu user */
+			openId?: string;
+	  }
+	| {
+			kind: "slack";
+			channel: string;
+			threadTs: string;
+	  };
+
 /** Result of base branch resolution, including the source for reporting */
 export interface BaseBranchResolution {
 	/** The resolved base branch name */
@@ -88,6 +128,13 @@ export interface CyrusAgentSession {
 	issue?: IssueMinimal;
 	/** Repository contexts for this session (always array, never undefined) */
 	repositories: RepositoryContext[];
+	/**
+	 * External channels this logical session is reachable from (IN-42 §Q1).
+	 * Optional and additive — omitted for sessions that predate the field; those
+	 * are migrated on restore by backfilling one binding from the primary channel
+	 * ({@link issueContext} / {@link externalSessionId}).
+	 */
+	channels?: ChannelBinding[];
 	workspace: Workspace;
 	// NOTE: Only one of these will be populated
 	claudeSessionId?: string; // Claude-specific session ID (assigned once it initializes)

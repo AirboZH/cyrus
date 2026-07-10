@@ -1133,6 +1133,8 @@ export class EdgeWorker extends EventEmitter {
 			slackAdapter,
 			{
 				cyrusHome: this.cyrusHome,
+				agentSessionManager: this.agentSessionManager,
+				correlationRegistry: this.globalSessionRegistry,
 				chatRepositoryProvider,
 				runnerConfigBuilder: this.runnerConfigBuilder,
 				createRunner: (config) => {
@@ -1356,6 +1358,8 @@ export class EdgeWorker extends EventEmitter {
 
 		this.feishuChatSessionHandler = new ChatSessionHandler(feishuAdapter, {
 			cyrusHome: this.cyrusHome,
+			agentSessionManager: this.agentSessionManager,
+			correlationRegistry: this.globalSessionRegistry,
 			chatRepositoryProvider,
 			runnerConfigBuilder: this.runnerConfigBuilder,
 			createRunner: (config, context) => {
@@ -2799,20 +2803,14 @@ ${taskSection}`;
 			return "busy";
 		}
 
-		// Busy if any runner is actively running
+		// Busy if any runner is actively running. Chat-platform (Slack/Feishu)
+		// runners now live in the shared singleton (IN-42 §5 P1), so this single
+		// enumeration already covers them.
 		const runners = this.agentSessionManager.getAllAgentRunners();
 		for (const runner of runners) {
 			if (runner.isRunning()) {
 				return "busy";
 			}
-		}
-
-		// Busy if any chat platform runner is actively running
-		if (
-			this.chatSessionHandler?.isAnyRunnerBusy() ||
-			this.feishuChatSessionHandler?.isAnyRunnerBusy()
-		) {
-			return "busy";
 		}
 
 		return "idle";
@@ -2956,16 +2954,12 @@ ${taskSection}`;
 			);
 		}
 
-		// get all agent runners (including chat platform sessions)
-		const agentRunners: IAgentRunner[] = [
-			...this.agentSessionManager.getAllAgentRunners(),
-		];
-		if (this.chatSessionHandler) {
-			agentRunners.push(...this.chatSessionHandler.getAllRunners());
-		}
-		if (this.feishuChatSessionHandler) {
-			agentRunners.push(...this.feishuChatSessionHandler.getAllRunners());
-		}
+		// Get all agent runners. Chat-platform (Slack/Feishu) runners now live in
+		// the shared singleton alongside issue runners (IN-42 §5 P1), so a single
+		// enumeration covers them — no need to also drain the chat handlers, which
+		// would return the same runner instances.
+		const agentRunners: IAgentRunner[] =
+			this.agentSessionManager.getAllAgentRunners();
 
 		// Kill all agent processes with null checking
 		for (const runner of agentRunners) {
@@ -6257,20 +6251,15 @@ ${taskSection}`;
 	 */
 	/**
 	 * Aggregator over every place active sessions live in this process.
-	 * Today: the primary AgentSessionManager (issue sessions) and the
-	 * ChatSessionHandler's private one (Slack / GitHub-PR-chat / future
-	 * chat platforms). New session origins should be added here so
-	 * downstream consumers (currently just resolveSessionFromCwd) keep
-	 * working without modification — single open extension point (OCP),
-	 * single responsibility (SRP: this method's only job is "where do
+	 * As of IN-42 §5 P1 chat sessions (Slack / Feishu) were converged into the
+	 * shared singleton AgentSessionManager alongside issue sessions, so a single
+	 * source now covers them all. Kept as its own method so future non-singleton
+	 * session origins have one place to be added — single open extension point
+	 * (OCP), single responsibility (SRP: this method's only job is "where do
 	 * sessions live?", separate from "how do we match one by cwd?").
 	 */
 	private getAllKnownSessions(): CyrusAgentSession[] {
-		return [
-			...this.agentSessionManager.getAllSessions(),
-			...(this.chatSessionHandler?.getAllChatSessions() ?? []),
-			...(this.feishuChatSessionHandler?.getAllChatSessions() ?? []),
-		];
+		return this.agentSessionManager.getAllSessions();
 	}
 
 	private resolveSessionFromCwd(cwd: string): ResolvedSession | null {

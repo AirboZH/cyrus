@@ -14,6 +14,7 @@ import {
 	type AgentPendingWork,
 	AgentSessionStatus,
 	AgentSessionType,
+	type ChannelBinding,
 	type CyrusAgentSession,
 	type CyrusAgentSessionEntry,
 	createLogger,
@@ -1702,11 +1703,12 @@ export class AgentSessionManager extends EventEmitter {
 		this.sessions.clear();
 		this.entries.clear();
 
-		// Restore sessions (migrate old sessions without repositories field)
+		// Restore sessions (migrate old sessions without repositories/channels field)
 		for (const [sessionId, sessionData] of Object.entries(serializedSessions)) {
 			const session: CyrusAgentSession = {
 				...sessionData,
 				repositories: sessionData.repositories ?? [],
+				channels: sessionData.channels ?? backfillChannels(sessionData),
 			};
 			this.sessions.set(sessionId, session);
 		}
@@ -1799,4 +1801,36 @@ export class AgentSessionManager extends EventEmitter {
 			this.activeStatusActivitiesBySession.delete(sessionId);
 		}
 	}
+}
+
+/**
+ * Migration backfill for sessions persisted before `channels[]` existed
+ * (IN-42 §5 P1). Derives one {@link ChannelBinding} from the session's primary
+ * channel so old sessions gain a binding without a data rewrite:
+ *
+ * - Linear sessions (identified by `externalSessionId` + issue context) get a
+ *   `linear` binding.
+ * - Anything else (e.g. a legacy issue session with no external session id) is
+ *   left with no channels — there is nothing to bind to.
+ *
+ * Returns `undefined` when nothing can be inferred so the field stays absent
+ * rather than an empty array (keeps serialized state clean).
+ */
+function backfillChannels(
+	session: CyrusAgentSession,
+): ChannelBinding[] | undefined {
+	const issueId = session.issueContext?.issueId ?? session.issueId;
+	const issueIdentifier =
+		session.issueContext?.issueIdentifier ?? session.issue?.identifier;
+	if (session.externalSessionId && issueId && issueIdentifier) {
+		return [
+			{
+				kind: "linear",
+				externalSessionId: session.externalSessionId,
+				issueId,
+				issueIdentifier,
+			},
+		];
+	}
+	return undefined;
 }

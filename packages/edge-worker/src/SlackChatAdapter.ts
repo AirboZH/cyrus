@@ -1,4 +1,4 @@
-import type { IAgentRunner, ILogger } from "cyrus-core";
+import type { ChannelBinding, IAgentRunner, ILogger } from "cyrus-core";
 import { createLogger } from "cyrus-core";
 import {
 	buildPromptText,
@@ -134,6 +134,15 @@ export class SlackChatAdapter
 
 	getEventId(event: SlackWebhookEvent): string {
 		return event.eventId;
+	}
+
+	/** Channel identity recorded on a new session (IN-42 §Q1). */
+	getChannelBinding(event: SlackWebhookEvent): ChannelBinding {
+		return {
+			kind: "slack",
+			channel: event.payload.channel,
+			threadTs: event.payload.thread_ts || event.payload.ts,
+		};
 	}
 
 	buildSystemPrompt(event: SlackWebhookEvent): string {

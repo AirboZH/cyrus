@@ -1,6 +1,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { IAgentRunner, ILogger, RunnerType } from "cyrus-core";
+import type {
+	ChannelBinding,
+	IAgentRunner,
+	ILogger,
+	RunnerType,
+} from "cyrus-core";
 import { createLogger } from "cyrus-core";
 import {
 	buildPromptText,
@@ -387,6 +392,22 @@ export class FeishuChatAdapter
 
 	getEventId(event: FeishuWebhookEvent): string {
 		return event.eventId;
+	}
+
+	/**
+	 * Channel identity recorded on a new session (IN-42 §Q1). `threadRoot` is the
+	 * canonical thread key component and doubles as the message id to reply into
+	 * the thread; `openId` is the requesting user.
+	 */
+	getChannelBinding(event: FeishuWebhookEvent): ChannelBinding {
+		const threadRoot = feishuThreadRoot(event.payload);
+		return {
+			kind: "feishu",
+			chatId: event.payload.chatId,
+			threadRoot,
+			rootMessageId: threadRoot,
+			openId: event.payload.user,
+		};
 	}
 
 	buildSystemPrompt(event: FeishuWebhookEvent): string {

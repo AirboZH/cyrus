@@ -7,6 +7,7 @@ import {
 	type FeishuWebhookEvent,
 } from "cyrus-feishu-event-transport";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentSessionManager } from "../src/AgentSessionManager.js";
 import type { ChatRepositoryProvider } from "../src/ChatRepositoryProvider.js";
 import { ChatSessionHandler } from "../src/ChatSessionHandler.js";
 import {
@@ -15,6 +16,7 @@ import {
 	PROCESSED_EMOJI,
 	RECEIPT_EMOJI,
 } from "../src/FeishuChatAdapter.js";
+import { SessionCorrelationRegistry } from "../src/GlobalSessionRegistry.js";
 import type { RunnerConfigBuilder } from "../src/RunnerConfigBuilder.js";
 import { TEST_CYRUS_CHAT } from "./test-dirs.js";
 
@@ -117,6 +119,8 @@ function buildHandler(
 ) {
 	return new ChatSessionHandler<FeishuWebhookEvent>(adapter, {
 		cyrusHome: TEST_CYRUS_CHAT,
+		agentSessionManager: new AgentSessionManager(),
+		correlationRegistry: new SessionCorrelationRegistry(),
 		chatRepositoryProvider: createStaticProvider(),
 		runnerConfigBuilder: createMockRunnerConfigBuilder(),
 		createRunner,
