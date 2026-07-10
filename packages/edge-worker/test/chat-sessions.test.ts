@@ -8,10 +8,12 @@ import {
 	type SlackWebhookEvent,
 } from "cyrus-slack-event-transport";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentSessionManager } from "../src/AgentSessionManager.js";
 import type { ChatRepositoryProvider } from "../src/ChatRepositoryProvider.js";
 import { LiveChatRepositoryProvider } from "../src/ChatRepositoryProvider.js";
 import type { ChatPlatformAdapter } from "../src/ChatSessionHandler.js";
 import { ChatSessionHandler } from "../src/ChatSessionHandler.js";
+import { SessionCorrelationRegistry } from "../src/GlobalSessionRegistry.js";
 import type { RunnerConfigBuilder } from "../src/RunnerConfigBuilder.js";
 import {
 	BEHAVIOURS_PAGE_ROUTE,
@@ -63,6 +65,21 @@ function createStaticProvider(
 		getRepositoryPaths: () => paths,
 		getDefaultRepository: () => defaultRepo,
 		getDefaultLinearWorkspaceId: () => linearWorkspaceId,
+	};
+}
+
+/**
+ * Fresh shared-session deps for a handler under test. Chat sessions now live in
+ * the injected singleton AgentSessionManager + correlation registry (IN-42 §5
+ * P1); each test gets its own pair so they stay isolated.
+ */
+function sharedChatDeps(): {
+	agentSessionManager: AgentSessionManager;
+	correlationRegistry: SessionCorrelationRegistry;
+} {
+	return {
+		agentSessionManager: new AgentSessionManager(),
+		correlationRegistry: new SessionCorrelationRegistry(),
 	};
 }
 
@@ -139,6 +156,7 @@ describe("ChatSessionHandler chat session permissions", () => {
 
 		const handler = new ChatSessionHandler(adapter, {
 			cyrusHome,
+			...sharedChatDeps(),
 			chatRepositoryProvider: createStaticProvider(chatRepositoryPaths),
 			runnerConfigBuilder: createMockRunnerConfigBuilder(),
 			createRunner: createRunner,
@@ -198,6 +216,7 @@ describe("ChatSessionHandler chat session permissions", () => {
 
 		const handler = new ChatSessionHandler(adapter, {
 			cyrusHome,
+			...sharedChatDeps(),
 			chatRepositoryProvider: createStaticProvider(
 				chatRepositoryPaths,
 				repository,
@@ -242,6 +261,7 @@ describe("ChatSessionHandler session-initiation gate", () => {
 		);
 		const handler = new ChatSessionHandler(adapter, {
 			cyrusHome: TEST_CYRUS_CHAT,
+			...sharedChatDeps(),
 			chatRepositoryProvider: createStaticProvider([]),
 			runnerConfigBuilder: createMockRunnerConfigBuilder(),
 			createRunner,
@@ -378,6 +398,7 @@ describe("ChatSessionHandler processed acknowledgement", () => {
 		});
 		const handler = new ChatSessionHandler(adapter, {
 			cyrusHome: TEST_CYRUS_CHAT,
+			...sharedChatDeps(),
 			chatRepositoryProvider: createStaticProvider([]),
 			runnerConfigBuilder: createMockRunnerConfigBuilder(),
 			createRunner,
@@ -432,6 +453,7 @@ describe("ChatSessionHandler processed acknowledgement", () => {
 		});
 		const handler = new ChatSessionHandler(adapter, {
 			cyrusHome: TEST_CYRUS_CHAT,
+			...sharedChatDeps(),
 			chatRepositoryProvider: createStaticProvider([]),
 			runnerConfigBuilder: createMockRunnerConfigBuilder(),
 			createRunner,
@@ -505,6 +527,7 @@ describe("ChatSessionHandler busy follow-up queueing", () => {
 		});
 		const handler = new ChatSessionHandler(adapter, {
 			cyrusHome: TEST_CYRUS_CHAT,
+			...sharedChatDeps(),
 			chatRepositoryProvider: createStaticProvider([]),
 			runnerConfigBuilder: createMockRunnerConfigBuilder(),
 			createRunner,
@@ -909,6 +932,7 @@ describe("ChatRepositoryProvider runtime updates", () => {
 		const adapter = new TestChatAdapter("runtime-thread");
 		const handler = new ChatSessionHandler(adapter, {
 			cyrusHome,
+			...sharedChatDeps(),
 			chatRepositoryProvider: provider,
 			runnerConfigBuilder: createMockRunnerConfigBuilder(),
 			createRunner,
@@ -956,6 +980,7 @@ describe("ChatRepositoryProvider runtime updates", () => {
 		const adapter = new TestChatAdapter("remove-thread");
 		const handler = new ChatSessionHandler(adapter, {
 			cyrusHome,
+			...sharedChatDeps(),
 			chatRepositoryProvider: provider,
 			runnerConfigBuilder: createMockRunnerConfigBuilder(),
 			createRunner,

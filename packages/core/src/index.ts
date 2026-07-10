@@ -64,6 +64,7 @@ export {
 } from "./allowed-tools-defaults.js";
 export type {
 	BaseBranchResolution,
+	ChannelBinding,
 	CyrusAgentSession,
 	CyrusAgentSessionEntry,
 	IssueContext,
