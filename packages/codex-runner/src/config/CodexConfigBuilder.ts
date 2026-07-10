@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { SandboxMode } from "@openai/codex-sdk";
 import type { ResolvedCodexConfig } from "../backend/types.js";
 import type {
 	CodexConfigOverrides,
@@ -40,7 +41,7 @@ export class CodexConfigBuilder {
 		return {
 			model: this.config.model,
 			sandbox: resolveCodexSandbox({
-				mode: this.config.sandbox || "workspace-write",
+				mode: this.resolveSandboxMode(),
 				workingDirectory: this.config.workingDirectory,
 				writableRoots: this.getAdditionalDirectories(),
 				networkAccess: this.resolveNetworkAccess(),
@@ -60,6 +61,39 @@ export class CodexConfigBuilder {
 			outputSchema: this.config.outputSchema,
 			resumeSessionId: this.config.resumeSessionId,
 		};
+	}
+
+	/**
+	 * Resolve the coarse Codex sandbox mode.
+	 *
+	 * `unrestrictedFilesystemAccess` is the operator-controlled "no sandbox"
+	 * intent set by trusted front doors (e.g. the Feishu full-access chat entry
+	 * point). Claude honors it by dropping its home-read restrictions; the Codex
+	 * equivalent is `danger-full-access`, which disables the workspace-write
+	 * sandbox entirely so the session can write anywhere and run commands as the
+	 * host user (root). Without this, a full-access Feishu session on the Codex
+	 * runner would still be boxed into `workspace-write` and unable to operate on
+	 * the real host — the exact failure that blocked deploying under Codex.
+	 *
+	 * `CYRUS_CODEX_FULL_ACCESS=true` is an explicit, instance-wide operator
+	 * opt-in that grants the same no-sandbox posture to *every* Codex session
+	 * (including Linear issue sessions, which never carry the per-session
+	 * `unrestrictedFilesystemAccess` flag). This brings Codex to parity with the
+	 * Claude runner on operator-trusted boxes that run with no egress sandbox —
+	 * where Claude issue sessions already execute without an OS sandbox, but
+	 * Codex would otherwise remain boxed into `workspace-write` and unable to run
+	 * deploys. The default (env unset) stays safe: `workspace-write`.
+	 *
+	 * SECURITY: only set the env on trusted, operator-controlled deployments.
+	 */
+	private resolveSandboxMode(): SandboxMode {
+		if (
+			this.config.unrestrictedFilesystemAccess ||
+			process.env.CYRUS_CODEX_FULL_ACCESS === "true"
+		) {
+			return "danger-full-access";
+		}
+		return this.config.sandbox || "workspace-write";
 	}
 
 	/**
