@@ -1,237 +1,71 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) working in this repository.
 
 ## Project Overview
 
-Cyrus (Linear Claude Agent) is a monorepo JavaScript/TypeScript application that integrates Linear's issue tracking with Anthropic's Claude Code to automate software development tasks. The project is transitioning to an edge-proxy architecture that separates OAuth/webhook handling (proxy) from Claude processing (edge workers).
+Cyrus (Linear Claude Agent) is a pnpm/TypeScript monorepo that integrates Linear issue tracking with Anthropic's Claude Code to automate software development. It is transitioning to an edge-proxy architecture separating OAuth/webhook handling (proxy) from Claude processing (edge workers).
 
-**Key capabilities:**
-- Monitors Linear issues assigned to a specific user
-- Creates isolated Git worktrees for each issue
-- Runs Claude Code sessions to process issues
-- Posts responses back to Linear as comments
-- Maintains conversation continuity using the `--continue` flag
-- Supports edge worker mode for distributed processing
-
+**Key capabilities:** monitors Linear issues assigned to a user; creates isolated Git worktrees per issue; runs Claude Code sessions; posts responses back to Linear as comments; maintains conversation continuity via `--continue`; supports edge worker mode for distributed processing.
 
 ## How Cyrus Works
 
-When a Linear issue is assigned to Cyrus, the following sequence occurs:
-
-1. **Issue Detection & Routing**: The EdgeWorker receives a webhook from Linear and routes the issue to the appropriate repository based on configured patterns or workspace catch-all rules.
-
-2. **Workspace Isolation**: A dedicated Git worktree is created for each issue (e.g., `worktrees/DEF-1/`) with a sanitized branch name derived from the issue identifier. This ensures complete isolation between concurrent tasks.
-
-3. **AI Classification**: The issue content is analyzed to determine its type (`code`, `question`, `research`, etc.) and the appropriate procedure is selected (e.g., `full-development` for coding tasks).
-
-4. **Subroutine Execution**: For development tasks, Claude executes a sequence of subroutines:
-   - **coding-activity**: Implements the requested feature/fix
-   - **verifications**: Runs tests, type checks, and linting
-   - **git-gh**: Commits changes and creates pull requests
-   - **concise-summary**: Generates a final summary for Linear
-
-5. **Mid-Implementation Prompting**: Users can add comments to the Linear issue while Claude is working. These comments are streamed into the active session, allowing real-time guidance (e.g., "Also add a modulo method while you're at it").
-
-6. **Activity Tracking**: Every thought and action is posted back to Linear as activities, providing full visibility into what Claude is doing.
-
-### Example Interaction
-
-A typical session flow:
-```
-[GitService] Fetching latest changes from remote...
-[GitService] Creating git worktree at .../worktrees/DEF-1 from origin/main
-[EdgeWorker] Workspace created at: .../worktrees/DEF-1
-[EdgeWorker] AI routing decision: Classification: code, Procedure: full-development
-[ClaudeRunner] Session ID assigned by Claude: c5c1fc00-...
-[AgentSessionManager] Created thought activity activity-6
-[AgentSessionManager] Created action activity activity-7
-... (Claude implements the feature)
-[ClaudeRunner] Session completed with 84 messages
-[AgentSessionManager] Subroutine completed, advancing to next: verifications
-```
+1. **Routing**: EdgeWorker receives a Linear webhook and routes the issue to a repository by configured patterns or workspace catch-all rules.
+2. **Workspace isolation**: A Git worktree is created per issue (e.g. `worktrees/DEF-1/`) with a sanitized branch name.
+3. **AI classification**: Issue content is classified (`code`, `question`, `research`, ...) and a procedure selected (e.g. `full-development`).
+4. **Subroutines**: Development tasks run `coding-activity` → `verifications` (tests/typecheck/lint) → `git-gh` (commit + PR) → `concise-summary`.
+5. **Mid-implementation prompting**: New Linear comments are streamed into the active session as real-time guidance.
+6. **Activity tracking**: Every thought/action is posted back to Linear as activities.
 
 ### Test Drives
 
-To see Cyrus in action, refer to the test drives in `apps/f1/test-drives/`. These documents showcase real interactions demonstrating:
-- How issues are processed end-to-end
-- Mid-implementation prompting in action
-- Subroutine transitions and activity logging
-- Final repository state after completion
+The F1 testing framework (`apps/f1/test-drives/`) provides a controlled environment to test Cyrus without touching production Linear workspaces.
 
-The F1 (Formula 1) testing framework provides a controlled environment to test Cyrus without affecting production Linear workspaces.
-
-CRITICAL: you must use the f1 test drive protocol during the 'testing and validation' stage of any major work undertaking. You CAN also use it in development situations where you want to test drive the version of the product that you're working on.
+CRITICAL: you must use the f1 test drive protocol during the 'testing and validation' stage of any major work undertaking. You CAN also use it to test drive the version of the product you're working on.
 
 ## Linear Webhooks Reference
 
-Cyrus processes Linear webhooks to respond to events like issue assignments, user prompts, and issue updates. The Linear SDK and webhook schemas are documented at:
+Schemas (Apollo Studio):
+- EntityWebhookPayload: https://studio.apollographql.com/public/Linear-Webhooks/variant/current/schema/reference/objects/EntityWebhookPayload
+- DataWebhookPayload: https://studio.apollographql.com/public/Linear-Webhooks/variant/current/schema/reference/unions/DataWebhookPayload
+- IssueWebhookPayload: https://studio.apollographql.com/public/Linear-Webhooks/variant/current/schema/reference/objects/IssueWebhookPayload
 
-- **EntityWebhookPayload**: https://studio.apollographql.com/public/Linear-Webhooks/variant/current/schema/reference/objects/EntityWebhookPayload
-- **DataWebhookPayload**: https://studio.apollographql.com/public/Linear-Webhooks/variant/current/schema/reference/unions/DataWebhookPayload
-- **IssueWebhookPayload**: https://studio.apollographql.com/public/Linear-Webhooks/variant/current/schema/reference/objects/IssueWebhookPayload
-
-Key webhook types handled:
-- `AgentSessionEvent` (created/prompted) - When issues are assigned to Cyrus or users send prompts
-- `AppUserNotification` (issueUnassignedFromYou) - When issues are unassigned
-- `Issue` (update with title/description changes) - When issue title or description is modified
-
-The `EntityWebhookPayload` contains an `updatedFrom` field that holds previous values of changed properties, enabling Cyrus to detect what changed and compare old vs new values.
+Key webhook types: `AgentSessionEvent` (created/prompted — assignment or user prompt), `AppUserNotification` (issueUnassignedFromYou), `Issue` (title/description updates). `EntityWebhookPayload.updatedFrom` holds previous values, enabling old-vs-new comparison.
 
 ## Working with SDKs
 
-When examining or working with a package SDK:
-
-1. First, install the dependencies:
-   ```bash
-   pnpm install
-   ```
-
-2. Locate the specific SDK in the `node_modules` directory to examine its structure, types, and implementation details.
-
-3. Review the SDK's documentation, source code, and type definitions to understand its API and usage patterns.
+`pnpm install` first, then examine the SDK under `node_modules` (structure, types, docs) before coding against it.
 
 ## Shared Skills Across Harnesses
 
-For reusable operational workflows (for example F1 test driving), keep a canonical skill in:
-
-- `skills/<skill-name>/SKILL.md`
-
-Then symlink that skill into harness-specific skill directories:
-
-- `.claude/skills/<skill-name>`
-- `.codex/skills/<skill-name>`
-- `.opencode/skills/<skill-name>`
-
-Use:
-
-```bash
-./scripts/symlink-skills.sh
-```
-
-Design rule:
-
-1. Keep subagent files thin wrappers.
-2. Put 95%+ workflow logic into canonical shared skills.
-3. Update shared skill first; avoid duplicating protocol text across harnesses.
+Keep canonical skills in `skills/<skill-name>/SKILL.md` and symlink into `.claude/skills/`, `.codex/skills/`, `.opencode/skills/` via `./scripts/symlink-skills.sh`. Rules: subagent files stay thin wrappers; 95%+ of workflow logic lives in the shared skill; update the shared skill first, never duplicate protocol text across harnesses.
 
 ## Checklist For New Agent CLI Harnesses
 
-When implementing a new runner/harness (for example Codex, Gemini, OpenCode, or other CLIs), use this checklist before shipping.
+Before shipping a new runner/harness (Codex, Gemini, OpenCode, etc.):
 
-### 1) Session Lifecycle And Turn Limits
+1. **Session lifecycle**: verify turn limits (`maxTurns`/`maxSessionTurns`), the error/result payload on limit exceeded, explicit deterministic stop behavior.
+2. **Prompt model**: how the base system prompt is applied; whether appended instructions extend or replace defaults; provider-specific instruction fields (e.g. `developer_instructions`) and precedence.
+3. **Streaming events**: capture real JSON streams, document item types, determine full objects vs deltas needing aggregation; add replay tests from real transcripts.
+4. **Final message semantics**: final answer lives in a `result` payload (Claude-style), last assistant message (Gemini-style), or mixed; always post a final `response` activity on success.
+5. **Tools & permissions**: validate `tools`/`allowedTools`/`disallowedTools` semantics; approval/sandbox behavior; tool calls produce both start and completion signals. For config-file-driven providers (e.g. Cursor CLI), implement a permission translation layer from Cyrus/Claude tool names to provider-native tokens, written before session start and updated between subroutines. Pre-enable Cursor MCP servers (`agent mcp list` + `agent mcp enable <server>`). Only `.cursor/mcp.json` counts as Cursor project MCP config (see https://cursor.com/docs/context/mcp#configuration-locations). Map `Read(**)`/`Write(**)` to workspace-scoped `Read(./**)`/`Write(./**)` (see https://cursor.com/docs/cli/reference/permissions).
+6. **Prompt streaming input**: set `supportsStreamingInput` correctly and gate behavior in runner adapters.
+7. **MCP/custom tools**: verify MCP config format and merge behavior, custom tool registration, and map MCP/custom-tool events into consistent runner message shapes.
+8. **Runner selection**: keep agent label and model label separate (`codex` vs `gpt-5-codex`); support description selectors `[agent=...]`, `[model=...]`, `[repo=...]`; test precedence of labels vs selectors vs repo defaults.
+9. **Activity formatting**: timeline-ready AgentActivity content; tool lifecycle events visible as activities (never dropped); Markdown checklists (`- [ ]` / `- [x]`).
+10. **Usage/typing**: map usage/cost/stop-reason fields to shared types; fill required compatibility fields the provider omits; strict TS compatibility for cross-runner contracts.
+11. **Config schema**: provider-specific defaults (`claudeDefaultModel`, `geminiDefaultModel`, `codexDefaultModel`); migration logic for renamed/legacy fields.
+12. **Validation before merge**: unit tests for adapters/formatters; replay tests from real transcripts; F1 end-to-end for label-based and selector-based runner/model selection, visible tool/file-edit activities, and final response posting.
 
-- Verify turn-limit behavior (`maxTurns`, `maxSessionTurns`, or equivalent).
-- Confirm what error/result payload is emitted when limits are exceeded.
-- Ensure session stop behavior is explicit and deterministic.
+**Codex lesson**: tool activity at `item.started`/`item.completed` was initially not mapped to `tool_use`/`tool_result`, losing action/file-edit visibility in Linear. Treat tool lifecycle mapping as a first-class acceptance criterion, not a formatter-only concern.
 
-### 2) Prompt Model And Instructions
-
-- Identify how base system prompt is applied.
-- Identify whether appended instructions are supported and whether they extend or replace defaults.
-- Confirm provider-specific instruction fields (for example `developer_instructions`) and expected precedence.
-
-### 3) Streaming Event Schema
-
-- Capture real JSON event streams and document item types.
-- Determine whether events are full objects or deltas/partials that require aggregation.
-- Add replay tests from real transcripts.
-
-### 4) Final Message Semantics
-
-- Verify where the final answer lives:
-  - in a `result` payload (Claude-style), or
-  - in the last assistant message (Gemini-style), or
-  - mixed model/event behavior.
-- Ensure we always post a final `response` activity when work completes successfully.
-
-### 5) Tools And Permissions
-
-- Validate `tools`, `allowedTools`, and `disallowedTools` semantics for the SDK.
-- Validate approval/sandbox behavior for tool execution.
-- Verify tool calls produce both start and completion signals.
-- For providers that rely on static/project config files (for example Cursor CLI), implement a permission translation layer from Cyrus/Claude tool names to provider-native permission tokens and write that config before session start. This must support subroutine-time updates when allowed/disallowed tools change. For Cursor MCP servers, pre-enable them before session start (`agent mcp list` + `agent mcp enable <server>` per server) so tools are available in headless runs. When using Cursor in Cyrus, only MCP servers configured in `.cursor/mcp.json` should be treated as project MCP config; use Cursor's MCP config-location and file-format docs as the source of truth: https://cursor.com/docs/context/mcp#configuration-locations. For broad file permissions, map wildcard `Read(**)` / `Write(**)` to workspace-scoped patterns (for example `Read(./**)` / `Write(./**)`) to avoid unintentionally permitting absolute system paths. Reference: https://cursor.com/docs/cli/reference/permissions
-
-### 6) Prompt Streaming Input
-
-- Verify whether the SDK supports streaming/incremental prompt input.
-- Set `supportsStreamingInput` correctly and gate behavior in runner adapters.
-
-### 7) MCP Servers And Custom Tools
-
-- Verify MCP server config format and merge behavior.
-- Verify custom tool registration/invocation behavior.
-- Ensure MCP/custom-tool events are mapped into consistent runner message shapes.
-
-### 8) Runner Selection Via Labels And Description Selectors
-
-- Keep agent label and model label separate (example: `codex` and `gpt-5-codex`).
-- Support issue description selectors like `[agent=...]`, `[model=...]`, `[repo=...]`.
-- Add precedence tests for labels vs selectors vs repository defaults.
-
-### 9) Activity Formatting And Timeline Visibility
-
-- Ensure formatter output is timeline-ready (AgentActivity content fields).
-- Ensure tool lifecycle events are visible as activities (not silently dropped).
-- Use Markdown-compatible formatting for checklists:
-  - `- [ ] item`
-  - `- [x] item`
-
-### 10) Usage, Stop Reasons, And Typing
-
-- Map usage/cost/stop-reason fields to expected shared types.
-- Fill required compatibility fields even when provider omits them natively.
-- Keep strict TypeScript compatibility for cross-runner shared contracts.
-
-### 11) Config Schema And Backward Compatibility
-
-- Use provider-specific defaults (`claudeDefaultModel`, `geminiDefaultModel`, `codexDefaultModel`).
-- Add config migration logic for renamed or legacy fields.
-- Keep docs/comments provider-specific and explicit.
-
-### 12) Validation Protocol Before Merge
-
-- Run unit tests for new runner adapters and formatter behavior.
-- Run replay tests from real CLI transcripts.
-- Validate F1 end-to-end scenarios for:
-  - label-based runner/model selection
-  - description selector-based runner/model selection
-  - visible tool/file-edit activities in session timeline
-  - final response posting behavior
-
-### Codex Integration Lesson Learned
-
-Codex emitted tool activity at `item.started`/`item.completed` events, but those were initially not mapped to `tool_use`/`tool_result`. The result was missing action/file-edit visibility in Linear. For any new harness, treat tool lifecycle mapping as a first-class acceptance criterion, not a formatter-only concern.
-
-### Cursor Integration Lesson Learned
-
-Cursor CLI permissions are enforced from config (`~/.cursor/cli-config.json` or `<project>/.cursor/cli.json`) instead of dynamic per-request tool allowlists. For Cursor-like providers, do not rely on dynamic SDK tool constraints alone—add a translation layer (for example `mcp__server__tool` -> `Mcp(server:tool)`, `Bash(...)` -> `Shell(...)`) and sync project permissions before each run and between subroutines. Also pre-enable MCP servers via `agent mcp list` + `agent mcp enable <server>` using both project-listed and runner-configured server names so headless sessions can invoke MCP tools immediately. In Cyrus Cursor runs, treat `.cursor/mcp.json` as the project MCP source and follow Cursor's configuration-location and file-syntax docs (these differ from Claude's MCP interpretation): https://cursor.com/docs/context/mcp#configuration-locations. Use workspace-scoped wildcard file permissions (`Read(./**)`, `Write(./**)`) rather than unscoped `Read(**)` / `Write(**)` in translation defaults. Reference: https://cursor.com/docs/cli/reference/permissions
+**Cursor lesson**: Cursor CLI enforces permissions from config (`~/.cursor/cli-config.json` or `<project>/.cursor/cli.json`), not dynamic allowlists. Add a translation layer (`mcp__server__tool` → `Mcp(server:tool)`, `Bash(...)` → `Shell(...)`), sync project permissions before each run and between subroutines, and pre-enable MCP servers for headless sessions.
 
 ## Navigating GitHub Repositories
 
-When you need to examine source code from GitHub repositories (especially when GitHub's authentication blocks normal navigation):
-
-**Use uuithub.com instead of github.com:**
-
-```
-# Instead of:
-https://github.com/google-gemini/gemini-cli/blob/main/src/file.ts
-
-# Use:
-https://uuithub.com/google-gemini/gemini-cli/blob/main/src/file.ts
-```
-
-This proxy service provides unauthenticated access to GitHub content, making it ideal for:
-- Reading source code files
-- Browsing directory structures
-- Examining schemas and configuration files
-- Investigating third-party library implementations
-
-Simply replace `github.com` with `uuithub.com` in any GitHub URL.
+When GitHub auth blocks navigation, replace `github.com` with `uuithub.com` in any GitHub URL for unauthenticated read access to files, trees, and schemas.
 
 ## Architecture Overview
-
-The codebase follows a pnpm monorepo structure:
 
 ```
 cyrus/
@@ -247,274 +81,72 @@ cyrus/
     └── ndjson-client/# NDJSON streaming client
 ```
 
-For a detailed visual representation of how these components interact and map Claude Code sessions to Linear comment threads, see @architecture.md.
+See @architecture.md for a visual map of how components interact and map Claude Code sessions to Linear comment threads.
 
 ## Testing Best Practices
 
 ### Prompt Assembly Tests
 
-When working with prompt assembly tests in `packages/edge-worker/test/prompt-assembly*.test.ts`:
-
-**CRITICAL: Always assert the ENTIRE prompt, never use partial checks like `.toContain()`**
-
-- Use `.expectUserPrompt()` with the complete expected prompt string
-- Use `.expectSystemPrompt()` with the complete expected system prompt (or `undefined`)
-- Use `.expectComponents()` to verify all prompt components
-- Use `.expectPromptType()` to verify the prompt type
-- Always call `.verify()` to execute all assertions
-
-This ensures comprehensive test coverage and catches regressions in prompt structure, formatting, and content. Partial assertions with `.toContain()` are too weak and can miss important changes.
-
-**Example**:
-```typescript
-// ✅ CORRECT - Full prompt assertion
-await scenario(worker)
-  .newSession()
-  .withUserComment("Test comment")
-  .expectUserPrompt(`<user_comment>
-  <author>Test User</author>
-  <timestamp>2025-01-27T12:00:00Z</timestamp>
-  <content>
-Test comment
-  </content>
-</user_comment>`)
-  .expectSystemPrompt(undefined)
-  .expectPromptType("continuation")
-  .expectComponents("user-comment")
-  .verify();
-
-// ❌ INCORRECT - Partial assertion (too weak)
-const result = await scenario(worker)
-  .newSession()
-  .withUserComment("Test comment")
-  .build();
-expect(result.userPrompt).toContain("<user_comment>");
-expect(result.userPrompt).toContain("Test User");
-```
+For `packages/edge-worker/test/prompt-assembly*.test.ts`: **CRITICAL — always assert the ENTIRE prompt, never `.toContain()` partial checks.** Use `.expectUserPrompt()` / `.expectSystemPrompt()` with complete strings, `.expectComponents()`, `.expectPromptType()`, then `.verify()`. Partial assertions are too weak and miss regressions in prompt structure, formatting, and content.
 
 ## Common Commands
 
-### Monorepo-wide Commands (run from root)
+Monorepo-wide (from root): `pnpm install`, `pnpm build`, `pnpm lint`, `pnpm test`, `pnpm test:packages:run` (recommended), `pnpm typecheck`, `pnpm dev` (watch).
+
+CLI app (`apps/cli/`): `pnpm start`, `pnpm dev`, `pnpm test` / `pnpm test:watch`. Link dev version globally:
 ```bash
-# Install dependencies for all packages
-pnpm install
-
-# Build all packages
-pnpm build
-
-# Build lint for the entire repository
-pnpm lint
-
-# Run tests across all packages
-pnpm test
-
-# Run tests only in packages directory (recommended)
-pnpm test:packages:run
-
-# Run TypeScript type checking
-pnpm typecheck
-
-# Development mode (watch all packages)
-pnpm dev
+pnpm build && pnpm uninstall cyrus-ai -g
+cd apps/cli && pnpm install -g . && pnpm link -g .
 ```
 
-### App-specific Commands
+Electron app (`apps/electron/`): `pnpm dev`, `pnpm build:all`, `pnpm electron:dev`.
 
-#### CLI App (`apps/cli/`)
-```bash
-# Start the agent
-pnpm start
+Proxy app (`apps/proxy/`): `pnpm start`, `pnpm dev`, `pnpm test`.
 
-# Development mode with auto-restart
-pnpm dev
-
-# Run tests
-pnpm test
-pnpm test:watch  # Watch mode
-
-# Local development setup (link development version globally)
-pnpm build                    # Build all packages first
-pnpm uninstall cyrus-ai -g    # Remove published version
-cd apps/cli                   # Navigate to CLI directory
-pnpm install -g .            # Install local version globally
-pnpm link -g .               # Link local development version
-```
-
-#### Electron App (`apps/electron/`)
-```bash
-# Development mode
-pnpm dev
-
-# Build for production
-pnpm build:all
-
-# Run electron in dev mode
-pnpm electron:dev
-```
-
-#### Proxy App (`apps/proxy/`)
-```bash
-# Start proxy server
-pnpm start
-
-# Development mode with auto-restart
-pnpm dev
-
-# Run tests
-pnpm test
-```
-
-### Package Commands (all packages follow same pattern)
-```bash
-# Build the package
-pnpm build
-
-# TypeScript type checking
-pnpm typecheck
-
-# Run tests
-pnpm test        # Watch mode
-pnpm test:run    # Run once
-
-# Development mode (TypeScript watch)
-pnpm dev
-```
+Any package: `pnpm build`, `pnpm typecheck`, `pnpm test` (watch) / `pnpm test:run`, `pnpm dev`.
 
 ## Linear State Management
 
-The agent automatically moves issues to the "started" state when assigned. Linear uses standardized state types:
-
-- **State Types Reference**: https://studio.apollographql.com/public/Linear-API/variant/current/schema/reference/enums/ProjectStatusType
-- **Standard Types**: `triage`, `backlog`, `unstarted`, `started`, `completed`, `canceled`
-- **Issue Assignment Behavior**: When an issue is assigned to the agent, it automatically transitions to a state with `type === 'started'` (In Progress)
+Assigned issues auto-transition to a state with `type === 'started'`. Standard types: `triage`, `backlog`, `unstarted`, `started`, `completed`, `canceled`. Reference: https://studio.apollographql.com/public/Linear-API/variant/current/schema/reference/enums/ProjectStatusType
 
 ## Important Development Notes
 
-1. **Edge-Proxy Architecture**: The project is transitioning to separate OAuth/webhook handling from Claude processing.
-
-2. **Dependencies**: 
-   - The claude-parser package requires `jq` to be installed on the system
-   - Uses pnpm as package manager (v10.11.0)
-   - TypeScript for all new packages
-
-3. **Git Worktrees**: When processing issues, the agent creates separate git worktrees. If a `cyrus-setup.sh` script exists in the repository root, it's executed in new worktrees for project-specific initialization. Symmetrically, if a `cyrus-teardown.sh` script exists in the repository root, it's executed in the worktree directory immediately before the worktree is removed when the issue reaches a terminal state (completed / canceled / deleted).
-
-4. **Testing**: Uses Vitest for all packages. Run tests before committing changes.
-
-5. **Sandbox Egress Proxy & CA Certificates**: When sandbox is enabled, the egress proxy generates a CA cert at `~/.cyrus/certs/cyrus-egress-ca.pem` for TLS interception. Per-session env vars are set in `RunnerConfigBuilder.buildSandboxConfig()` to cover most tools:
-   - `NODE_EXTRA_CA_CERTS` (Node.js), `GIT_SSL_CAINFO` (Git), `SSL_CERT_FILE` (OpenSSL/Ruby), `REQUESTS_CA_BUNDLE` / `PIP_CERT` (Python), `CURL_CA_BUNDLE` (curl/OpenSSL), `CARGO_HTTP_CAINFO` (Rust), `AWS_CA_BUNDLE` (AWS CLI), `DENO_CERT` (Deno)
-   - **`systemWideCert` config flag**: When `sandbox.systemWideCert: true` is set in `config.json`, all per-session CA cert env vars above are skipped — the OS cert store handles trust for all tools. Set this after trusting the CA cert system-wide via `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.cyrus/certs/cyrus-egress-ca.pem` (macOS) or `sudo cp ~/.cyrus/certs/cyrus-egress-ca.pem /usr/local/share/ca-certificates/cyrus-egress-ca.crt && sudo update-ca-certificates` (Linux).
-   - **Gotchas — tools that ignore env vars and require system keychain trust**: Bun, .NET/nuget, curl on macOS (compiled against SecureTransport, the default). For these, users must trust the cert system-wide (see above) regardless of the `systemWideCert` setting.
-   - **Gotcha — parent process env vars**: If `GIT_SSL_CAINFO`, `SSL_CERT_FILE`, or `CURL_CA_BUNDLE` are set in the Cyrus parent process env (e.g., from a previous test or `.env`), they can break git push/fetch from the Cyrus process itself (not child sessions). The parent process does not route through the egress proxy, so these vars should not be set in `~/.cyrus/.env`.
-   - Pre-existing `NODE_EXTRA_CA_CERTS` from the host environment are merged into a combined bundle via `EgressProxy.buildCACertBundle()`.
-
-6. **Two Separate Permission Systems — Tool vs. Sandbox**:
-   Claude Code enforces security through two independent mechanisms that must both be configured correctly:
-
-   **A. Tool permissions** (`allowedTools` / `disallowedTools` → `--allowedTools` / `--disallowedTools` CLI flags)
-   - Checked by Claude Code's permission layer — NOT enforced at the OS level.
-   - `Read(~/**)` does **not work** as a `disallowedTools` pattern — `~` is not expanded to the home directory path by Claude Code, so the pattern never matches. Other `**` glob patterns work fine; the problem is specific to the `~` prefix.
-   - `disallowedTools` IS an instant deny that takes precedence over `allowedTools` — if a parent path is denied, all its descendants are blocked. The problem is purely that `~` is never expanded, so `Read(~/**)` silently matches nothing.
-   - **Absolute paths in tool patterns require a double leading slash** — Claude Code's parser requires `//absolute/path` (e.g. `Read(//Users/alice/.ssh/**)`) for absolute paths. This is also the key to working with home directory paths: instead of `Read(~/**)` (which doesn't expand), you use `Read(///Users/alice/.ssh/**)` with the resolved absolute path. The double-slash is added in code as `/${fullPath}` where `fullPath` is already absolute.
-   - Solution: `buildHomeDirectoryDisallowedTools(cwd, allowedDirectories)` in `packages/claude-runner/src/home-directory-restrictions.ts` enumerates the home directory explicitly using these double-slash absolute paths — bypassing the tilde expansion issue by naming each sibling concretely. `allowedDirectories` paths are excluded so the attachments dir and repo paths remain readable. This is wired into `ClaudeRunner.ts` automatically.
-
-   **B. Sandbox filesystem permissions** (`sandbox.filesystem.allowRead` / `denyRead` / `allowWrite`)
-   - Enforced at the **OS level** via bubblewrap (Linux) or macOS sandbox — no shell or Claude Code involvement.
-   - A **true deny+whitelist model works here**: `denyRead: ["~/"]` + `allowRead: ["."]` is sufficient to deny the entire home directory while allowing the worktree. `"."` resolves to the cwd of the primary folder Claude is working in.
-   - Configured in `buildSandboxConfig()` in `packages/edge-worker/src/RunnerConfigBuilder.ts`.
-
-   **Key invariant**: If sandbox is enabled, both systems should restrict home directory reads. If sandbox is disabled (e.g. in local dev), only tool permissions apply — and those require explicit enumeration via `buildHomeDirectoryDisallowedTools`.
-
-7. **Updating `@anthropic-ai/claude-agent-sdk`**: Whenever you update the `claude-agent-sdk` dependency (which bundles a specific Claude Code version), you **must refresh the tool allowance lists** in `packages/claude-runner/src/config.ts`. Run:
-   ```bash
-   ./scripts/extract-claude-tools.sh
-   ```
-   This executes `claude -p "say hi" --output-format stream-json --verbose` and extracts the tool names from the `init` block. Compare the output against the `availableTools` array in `config.ts` and update it to match. Also review `readOnlyTools`, `writeTools`, and the helper functions to ensure new tools are categorized correctly. Failing to do this can cause sessions to silently miss new tools or reference removed ones.
-
-8. **Routing Behavior & Self-Describing Prompts**: When changing repository routing behavior (e.g., description-tag syntax, label routing, base branch overrides, multi-repo support), you **must also update the system prompts that describe these capabilities to Cyrus itself**. The product relies on self-describing prompts so that Cyrus can correctly instruct users and create properly-routed sub-issues. Known locations (not exhaustive):
-   - `packages/edge-worker/src/PromptBuilder.ts` — Generates the `<repository_routing_context>` XML block included in session system prompts, documenting routing methods and priority order
-   - `packages/edge-worker/src/SlackChatAdapter.ts` — Builds the Slack chat system prompt including orchestration notes with repo routing syntax
-   - `packages/edge-worker/src/ActivityPoster.ts` — Posts routing activities to Linear timeline (method display names, formatting)
-
-9. **Adding a new top-level `EdgeWorkerConfig` field**: Adding a property to the `EdgeWorkerConfig` Zod schema in `packages/core/src/config-schemas.ts` is **not enough** to make it available at runtime. `ConfigManager.loadConfigSafely()` in `packages/edge-worker/src/ConfigManager.ts` reads `config.json`, then explicitly merges a **hardcoded whitelist** of fields onto its in-memory config — every field not on that list is silently dropped on each reload. Likewise, `detectGlobalConfigChanges()` only fires a `configChanged` event when one of a hardcoded list of keys differs from the previous reload.
-
-   When you add a new top-level field you **must update both lists**:
-   - The merge in `loadConfigSafely()` (around line ~200) — add `<newField>: parsedConfig.<newField> || this.config.<newField>`.
-   - The `globalKeys` array in `detectGlobalConfigChanges()` — add the field name so changes to it trigger downstream `setConfig` calls on dependent services (e.g., `ToolPermissionResolver`).
-
-   Symptom of forgetting this: the field appears in `~/.cyrus/config.json`, the cyrus process is restarted, but downstream code keeps seeing the default (or never picks up hot-reloads). This bit us with `slackAllowedTools` / `githubAllowedTools` / `slackMcpConfigs` / `linearMcpConfigs` / `githubMcpConfigs` during CYHOST-967.
-
-10. **Changing the `cyrus-tools` MCP server's exposed tools**: When you add or remove a tool from the inline `cyrus-tools` MCP server (the one served by `apps/proxy` / wired up in `McpConfigService.buildMcpConfig`), you **must also update the catalog `cyrus-hosted` keeps for the `/settings/tools` UI**. cyrus-hosted maintains a per-server tool list so its grid can render a row per tool (with the right per-platform toggle) without having to introspect a live MCP server. Today that catalog lives in `apps/app/src/lib/cyrus-config/builder.ts` under the `KNOWN_MCP_TOOLS` map (look for the `"mcp__cyrus-tools"` key); update that array in the same PR — the same constants are also imported by the platform-default lists in `packages/core/src/allowed-tools-defaults.ts` when a particular `cyrus-tools` tool is enabled by default, so reflect that there too if the new tool should be on out of the box.
-
-   Symptom of forgetting this: the new tool is callable at runtime (the runtime knows about it via the live MCP server) but it never appears in the `/settings/tools` MCP Servers section — so operators can't see it, can't toggle it on/off per platform, and per-repo overrides treat it as unknown.
-
-11. **Adding a new path-bearing field to `EdgeWorkerConfig`**: cyrus-hosted emits self-host paths with literal `~/` prefixes (e.g. `~/.cyrus/mcp-configs/mcp-supabase.json`) because the user's home directory is not known server-side. Node's `fs.readFileSync` does **not** expand `~`, so any path string that flows from `config.json` to `readFileSync` (or to a child SDK that does the same) must be run through `resolvePath` from `cyrus-core` first.
-
-   Per-repository paths (`repositoryPath`, `workspaceBaseDir`, `mcpConfigPath`, `promptTemplatePath`) are already normalized at three sites in `EdgeWorker.ts`: the constructor, `addNewRepositories`, and `updateModifiedRepositories`. Each builds a `resolvedRepo` via `resolvePath(...)` before inserting into `this.repositories`, so downstream consumers (e.g. `RunnerConfigBuilder`, `McpConfigService.buildMergedMcpConfigPath`) get already-absolute paths.
-
-   **Top-level (non-repo-scoped) path fields are a separate, easy-to-miss codepath.** They live directly on `EdgeWorkerConfig` and are read straight off `this.config.<field>` — they do not go through the repo-resolution loop. When you add one, you must also normalize it. The canonical site for this is `EdgeWorker.normalizeConfigPaths()` (called once in the constructor and once on `configChanged`); add your field there alongside `slackMcpConfigs` / `linearMcpConfigs` / `githubMcpConfigs`.
-
-   Symptom of forgetting this: self-host sessions crash with `ENOENT: no such file or directory, open '~/.cyrus/...'` while cloud sessions (which get absolute paths from cyrus-hosted) work fine. This bit us with the three platform MCP config arrays added in CYHOST-967 / v0.2.53 — they were the only path-bearing fields on `EdgeWorkerConfig` that bypassed normalization, and crashed every self-host session that had a connected platform MCP integration.
+1. **Edge-proxy architecture**: OAuth/webhook handling is being separated from Claude processing.
+2. **Dependencies**: claude-parser requires system `jq`; pnpm v10.11.0; TypeScript for all new packages.
+3. **Git worktrees**: a root `cyrus-setup.sh` runs in new worktrees for project-specific init; a root `cyrus-teardown.sh` runs in the worktree immediately before removal at a terminal state (completed/canceled/deleted).
+4. **Testing**: Vitest everywhere; run tests before committing.
+5. **Sandbox egress proxy & CA certs**: with sandbox enabled, the egress proxy generates a CA at `~/.cyrus/certs/cyrus-egress-ca.pem` for TLS interception. `RunnerConfigBuilder.buildSandboxConfig()` sets per-session env vars: `NODE_EXTRA_CA_CERTS`, `GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`/`PIP_CERT`, `CURL_CA_BUNDLE`, `CARGO_HTTP_CAINFO`, `AWS_CA_BUNDLE`, `DENO_CERT`.
+   - `sandbox.systemWideCert: true` skips all per-session CA env vars (OS cert store handles trust). Trust system-wide first: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.cyrus/certs/cyrus-egress-ca.pem` (macOS) or `sudo cp ~/.cyrus/certs/cyrus-egress-ca.pem /usr/local/share/ca-certificates/cyrus-egress-ca.crt && sudo update-ca-certificates` (Linux).
+   - Tools that ignore env vars and always need system trust: Bun, .NET/nuget, macOS curl (SecureTransport default).
+   - If `GIT_SSL_CAINFO`/`SSL_CERT_FILE`/`CURL_CA_BUNDLE` are set in the Cyrus parent env, they break git push/fetch from Cyrus itself (parent doesn't route through the proxy) — don't set them in `~/.cyrus/.env`.
+   - Pre-existing `NODE_EXTRA_CA_CERTS` is merged via `EgressProxy.buildCACertBundle()`.
+6. **Two permission systems — tool vs. sandbox**:
+   - **A. Tool permissions** (`allowedTools`/`disallowedTools` CLI flags): checked by Claude Code's permission layer, not OS-level. `Read(~/**)` never matches — `~` is not expanded. `disallowedTools` is instant deny, takes precedence over `allowedTools`. Absolute paths need a double leading slash: `Read(//Users/alice/.ssh/**)` (added in code as `/${fullPath}`). Solution: `buildHomeDirectoryDisallowedTools(cwd, allowedDirectories)` in `packages/claude-runner/src/home-directory-restrictions.ts` enumerates home-dir siblings with double-slash absolute paths, excluding `allowedDirectories`; wired into `ClaudeRunner.ts` automatically.
+   - **B. Sandbox filesystem permissions** (`sandbox.filesystem.allowRead`/`denyRead`/`allowWrite`): OS-level (bubblewrap/macOS sandbox). True deny+whitelist works: `denyRead: ["~/"]` + `allowRead: ["."]` (`.` = primary working cwd). Configured in `buildSandboxConfig()` in `packages/edge-worker/src/RunnerConfigBuilder.ts`.
+   - **Key invariant**: if sandbox is enabled, both systems restrict home reads; if disabled (local dev), only tool permissions apply — requiring explicit enumeration via `buildHomeDirectoryDisallowedTools`.
+7. **Updating `@anthropic-ai/claude-agent-sdk`**: must refresh tool allowance lists in `packages/claude-runner/src/config.ts`. Run `./scripts/extract-claude-tools.sh` (extracts tool names from the `init` block), compare against `availableTools` in `config.ts`, and review `readOnlyTools`/`writeTools`/helpers. Otherwise sessions silently miss new tools or reference removed ones.
+8. **Routing & self-describing prompts**: when changing routing behavior (description-tag syntax, label routing, base branch overrides, multi-repo), also update the prompts describing these to Cyrus itself:
+   - `packages/edge-worker/src/PromptBuilder.ts` — `<repository_routing_context>` XML block
+   - `packages/edge-worker/src/SlackChatAdapter.ts` — Slack chat system prompt orchestration notes
+   - `packages/edge-worker/src/ActivityPoster.ts` — routing activities on the Linear timeline
+9. **New top-level `EdgeWorkerConfig` field**: adding to the Zod schema in `packages/core/src/config-schemas.ts` is not enough. `ConfigManager.loadConfigSafely()` (`packages/edge-worker/src/ConfigManager.ts`) merges only a hardcoded whitelist of fields on reload; `detectGlobalConfigChanges()` fires only for a hardcoded `globalKeys` list. Update both: add `<newField>: parsedConfig.<newField> || this.config.<newField>` to the merge (~line 200) and the field name to `globalKeys`. Symptom if forgotten: field in `~/.cyrus/config.json` is silently ignored / hot-reloads never propagate (bit us in CYHOST-967).
+10. **Changing `cyrus-tools` MCP tools**: when adding/removing a tool on the inline `cyrus-tools` MCP server (`McpConfigService.buildMcpConfig`), also update the cyrus-hosted catalog for the `/settings/tools` UI: `KNOWN_MCP_TOOLS` (`"mcp__cyrus-tools"` key) in `apps/app/src/lib/cyrus-config/builder.ts`, plus `packages/core/src/allowed-tools-defaults.ts` if the tool should be on by default. Symptom if forgotten: tool works at runtime but is invisible/untoggleable in the settings UI.
+11. **New path-bearing `EdgeWorkerConfig` field**: cyrus-hosted emits literal `~/` paths; `fs.readFileSync` doesn't expand `~`, so paths must go through `resolvePath` from `cyrus-core`. Repo-scoped paths are normalized in `EdgeWorker.ts` (constructor, `addNewRepositories`, `updateModifiedRepositories`). Top-level path fields bypass that loop — normalize them in `EdgeWorker.normalizeConfigPaths()` alongside `slackMcpConfigs`/`linearMcpConfigs`/`githubMcpConfigs`. Symptom if forgotten: self-host sessions crash with `ENOENT ... open '~/.cyrus/...'` while cloud sessions work (CYHOST-967 / v0.2.53).
 
 ## Dependency Security Policy (MANDATE)
 
-Our team's mandated approach for addressing Dependabot advisories and other
-transitive-dependency vulnerabilities:
+1. **Prefer direct-dep bumps** in the owning `packages/*` or `apps/*` `package.json` (not root) to a version whose graph includes the patched transitive; regenerate the lockfile.
+2. **Root `pnpm.overrides` only when a direct-dep bump can't reach the transitive** (deep transitives with no patched upstream release). Document the reason inline.
+3. **Remove overrides when a dep bump makes them redundant** — verify with `pnpm install && pnpm audit` in the same change.
+4. **`pnpm audit` must report zero advisories** after any dependency change; commit the regenerated `pnpm-lock.yaml` alongside.
 
-1. **Prefer direct-dep bumps in the owning `package.json`.** If the vulnerable
-   dep is transitively pulled in by one of *our* direct dependencies, bump that
-   direct dep (in the specific package that owns it — `packages/*` or `apps/*`,
-   not the root) to a version whose resolved dep graph includes the patched
-   transitive. Regenerate the lockfile and let pnpm's natural resolution do the
-   work.
-
-2. **Only use root `pnpm.overrides` when a direct-dep bump cannot reach the
-   vulnerable transitive.** This is the fallback for deep transitives (3+
-   levels deep) whose owning direct dep has no released version that resolves
-   to the patched transitive — typically because upstream hasn't released yet
-   or pins its transitive too loosely for us to reach. Document the reason
-   inline with a brief comment or commit message.
-
-3. **Always clean up overrides when a future dep bump makes them redundant.**
-   When you update a direct dependency (security or otherwise), check whether
-   any existing entry in `pnpm.overrides` is now satisfied naturally by the
-   new resolution. If so, **remove that override in the same change**. Verify
-   with `pnpm install && pnpm audit` that the removal is safe before committing.
-
-4. **Verify with `pnpm audit`.** After any dependency change, `pnpm audit`
-   must report zero advisories. Commit the regenerated `pnpm-lock.yaml`
-   alongside the `package.json` change.
-
-Why this matters: overrides are a blunt instrument that hide the real source
-of a dep. Bumping the owning direct dep is precise, gets picked up by
-Dependabot, keeps our graph honest, and prevents override rot where entries
-live on long after they stop doing anything.
+Why: overrides hide the real dep source and rot; direct-dep bumps are precise and Dependabot-visible.
 
 ## Development Workflow
 
-When working on this codebase, follow these practices:
-
-1. **As part of submitting a Pull Request**:
-   - Update `CHANGELOG.md` under the `## [Unreleased]` section with your changes
-   - Use appropriate subsections: `### Added`, `### Changed`, `### Fixed`, `### Removed`
-   - Include brief, clear descriptions of what was changed and why
-   - **Include the PR number/link**: If the PR is already created, include the link (e.g., `([#123](https://github.com/ceedaragents/cyrus/pull/123))`). If not, create the PR first, then update the changelog with the link, commit, and push.
-   - Run `pnpm test:packages` to ensure all package tests pass
-   - Run `pnpm typecheck` to verify TypeScript compilation
-   - Consider running `pnpm build` to ensure the build succeeds
-
-2. **Internal Changelog**:
-   - For internal development changes, refactors, tooling updates, or other non-user-facing modifications, update `CHANGELOG.internal.md`.
-   - Follow the same format as the main changelog.
-   - This helps track internal improvements that don't need to be exposed to end-users.
-
-3. **Changelog Format**:
-   - Follow [Keep a Changelog](https://keepachangelog.com/) format
-   - **Focus only on end-user impact**: Write entries from the perspective of users running the `cyrus` CLI binary
-   - Avoid technical implementation details, package names, or internal architecture changes
-   - Be concise but descriptive about what users will experience differently
-   - Group related changes together
-   - Example: "New comments now feed into existing sessions" NOT "Implemented AsyncIterable<SDKUserMessage> for ClaudeRunner"
+1. **Pull requests**: update `CHANGELOG.md` under `## [Unreleased]` (`### Added`/`Changed`/`Fixed`/`Removed`) with what changed and why; include the PR link (create the PR first if needed). Run `pnpm test:packages`, `pnpm typecheck`, and consider `pnpm build`.
+2. **Internal changes** (refactors, tooling, non-user-facing): update `CHANGELOG.internal.md` instead, same format.
+3. **Changelog format**: Keep a Changelog; write from the perspective of users running the `cyrus` CLI binary — user impact only, no package names or internals. Example: "New comments now feed into existing sessions" NOT "Implemented AsyncIterable<SDKUserMessage> for ClaudeRunner".
 
 ## Key Code Paths
 
@@ -522,68 +154,32 @@ When working on this codebase, follow these practices:
 - **Claude Execution**: `packages/claude-runner/src/ClaudeRunner.ts`
 - **Session Management**: `packages/core/src/session/`
 - **Edge Worker**: `packages/edge-worker/src/EdgeWorker.ts`
-- **GitHub Token Resolution**: `EdgeWorker.resolveGitHubToken()` — three-tier fallback: proxy-forwarded installation token → self-minted GitHub App token (via `GitHubAppTokenProvider`) → `GITHUB_TOKEN` PAT. Self-hosted users with a GitHub App use the middle tier; cloud/proxy users get tokens forwarded; legacy users fall back to a PAT.
-- **GitHub App Token Minting**: `packages/github-event-transport/src/GitHubAppTokenProvider.ts` — signs JWTs with the App's private key and exchanges them for short-lived installation tokens. Caches tokens and refreshes 5 minutes before expiry.
+- **GitHub Token Resolution**: `EdgeWorker.resolveGitHubToken()` — three-tier fallback: proxy-forwarded installation token → self-minted GitHub App token (`GitHubAppTokenProvider`) → `GITHUB_TOKEN` PAT.
+- **GitHub App Token Minting**: `packages/github-event-transport/src/GitHubAppTokenProvider.ts` — JWT signed with the App's private key, exchanged for short-lived installation tokens; cached, refreshed 5 min before expiry.
 - **OAuth Flow**: `apps/proxy/src/services/OAuthService.mjs`
 
 ## Testing MCP Linear Integration
 
-To test the Linear MCP (Model Context Protocol) integration in the claude-runner package:
+```bash
+cd packages/claude-runner
+echo "LINEAR_API_TOKEN=your_linear_token_here" > .env
+pnpm build
+node test-scripts/simple-claude-runner-test.js
+```
 
-1. **Setup Environment Variables**:
-   ```bash
-   cd packages/claude-runner
-   # Create .env file with your Linear API token
-   echo "LINEAR_API_TOKEN=your_linear_token_here" > .env
-   ```
-
-2. **Build the Package**:
-   ```bash
-   pnpm build
-   ```
-
-3. **Run the Test Script**:
-   ```bash
-   node test-scripts/simple-claude-runner-test.js
-   ```
-
-The test script demonstrates:
-- Loading Linear API token from environment variables
-- Configuring the official Linear HTTP MCP server
-- Listing available MCP tools
-- Using Linear MCP tools to fetch user info and issues
-- Proper error handling and logging
-
-The script will show:
-- Whether the MCP server connects successfully
-- What Linear tools are available
-- Current user information
-- Issues in your Linear workspace
-
-This integration is automatically available in all Cyrus sessions - the EdgeWorker automatically configures the official Linear MCP server for each repository using its Linear token.
+The script verifies MCP server connectivity, lists Linear tools, and fetches user info/issues. In production, EdgeWorker auto-configures the official Linear MCP server per repository.
 
 ## Publishing
 
-For publishing and release instructions, use the `/release` skill (within Claude Code or Claude Agent SDK) which provides a complete guide for publishing packages to npm in the correct dependency order. Invoke it with:
-
-```
-/release
-```
-
+Use the `/release` skill (Claude Code / Claude Agent SDK) for publishing all packages to npm in dependency order.
 
 ## Gemini CLI for Testing
 
-The project uses Google's Gemini CLI for testing the GeminiRunner implementation. Install the specific version:
-
+Install the pinned version for GeminiRunner integration tests:
 ```bash
 npm install -g @google/gemini-cli@0.17.0
 ```
 
-This ensures consistency when running integration tests that interact with the Gemini API.
+Config reference: https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/configuration.md
 
-### Gemini Configuration Reference
-
-For detailed information about Gemini CLI configuration options (settings.json structure, model aliases, previewFeatures, etc.), refer to:
-- **Official Documentation**: https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/configuration.md
-
-The GeminiRunner automatically generates a `~/.gemini/settings.json` file with single-turn model aliases and preview features enabled if one doesn't already exist.
+GeminiRunner auto-generates `~/.gemini/settings.json` with single-turn model aliases and preview features if none exists.
