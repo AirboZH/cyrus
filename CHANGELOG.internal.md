@@ -4,7 +4,8 @@ This changelog documents internal development changes, refactors, tooling update
 
 ## [Unreleased]
 
-_No internal-only changes._
+### Added
+- New `xight-website` package (`apps/website`): a statically-exported Next.js marketing site for the Xight project (Chinese copy, Devin-inspired monochrome design, animated Feishu chat demo, bento use-case grid, pipeline/FAQ sections). Builds to `apps/website/out/` for static hosting.
 
 ## [0.2.66] - 2026-06-19
 
